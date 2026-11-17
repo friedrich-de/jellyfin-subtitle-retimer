@@ -44,9 +44,16 @@ if [ -z "${RETIMER_E2E_JELLYFIN:-}" ]; then
   export RETIMER_E2E_JELLYFIN="${PWD}/${cache}/jellyfin/jellyfin"
 fi
 
+# Build before the tests, and without the Jimaku key. The compiler's and the build's helper
+# processes can outlive this script, and they keep the environment they were started with.
+# So they are switched off here, and no build step sees the key.
+export UseSharedCompilation=false
+export MSBUILDDISABLENODEREUSE=1
+
 # The tests serve dist/ themselves and put their own address into the manifest.
-dev/package.sh >/dev/null
+env -u JIMAKU_API_KEY dev/package.sh >/dev/null
+env -u JIMAKU_API_KEY dotnet build Jellyfin.Plugin.Retimer.E2E -c Release --nologo -v quiet
 export RETIMER_E2E_PACKAGE_DIR="${PWD}/dist"
 export RETIMER_E2E_REQUIRED=1
 
-dotnet test --project Jellyfin.Plugin.Retimer.E2E -c Release
+dotnet test --project Jellyfin.Plugin.Retimer.E2E -c Release --no-build

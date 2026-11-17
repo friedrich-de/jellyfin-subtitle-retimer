@@ -45,7 +45,9 @@ the side menu, an administrator can add the page to `menuLinks` in the web clien
 | `POST /Retimer/Test/Jimaku`, `POST /Retimer/Test/Retimer` | no | no | yes |
 | Jellyfin's own `GET/POST /Plugins/{id}/Configuration` (the keys) | no | no | yes |
 
-A TMDB id is written the way Jimaku writes it: `tv:123` or `movie:123`.
+A TMDB id is written the way Jimaku writes it: `tv:123` or `movie:123`. Jimaku keeps anime and
+live action apart: a search finds anime entries unless it says `anime=false`, and that holds for
+a lookup by id too.
 
 The keys are stored by Jellyfin in `plugins/configurations/Jellyfin.Plugin.Retimer.xml` on the
 server, readable by whoever administers the machine. No endpoint of the plugin returns them.
@@ -80,6 +82,8 @@ the environment variable `RETIMER_JIMAKU_API_URL`. That variable exists for test
 reads it once at start and logs a warning when it is set. Leave it unset on a real server.
 
 One more end-to-end test searches the real jimaku.cc. It runs only when `JIMAKU_API_KEY` is set.
+The script builds everything before the tests and keeps the key away from the build, because the
+compiler's helper process can outlive a build together with its environment.
 
 ## Package and install
 

@@ -426,6 +426,9 @@ public class JellyfinServer : IAsyncLifetime
             start.Environment.Remove("RETIMER_JIMAKU_API_URL");
         }
 
+        // The server gets its Jimaku key through the settings, like on a real installation.
+        start.Environment.Remove("JIMAKU_API_KEY");
+
         var ffmpeg = Environment.GetEnvironmentVariable("RETIMER_E2E_FFMPEG");
         if (!string.IsNullOrEmpty(ffmpeg))
         {

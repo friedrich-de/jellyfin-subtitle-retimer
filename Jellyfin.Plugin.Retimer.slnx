@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Jellyfin.Plugin.Retimer/Jellyfin.Plugin.Retimer.csproj" />
+  <Project Path="Jellyfin.Plugin.Retimer.Tests/Jellyfin.Plugin.Retimer.Tests.csproj" />
+  <Project Path="Jellyfin.Plugin.Retimer.E2E/Jellyfin.Plugin.Retimer.E2E.csproj" />
+</Solution>

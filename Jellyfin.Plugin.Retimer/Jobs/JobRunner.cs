@@ -237,10 +237,10 @@ internal sealed class JobRunner
 
             if (found.NeedsChoice)
             {
-                job.State = JobState.NoFit;
-                job.Detail = "No model answered" + (found.ModelProblem is null ? "." : ": " + found.ModelProblem) + " Choose a file yourself.";
-                _store.UpdateItem(job.ItemId, language, item => item.NoFit = true);
-                return;
+                // Which file is the episode's is the model's to say. Without its answer none is picked.
+                throw new JobFailedException(_model.Model is null
+                    ? FileFinder.NoModel
+                    : "The model gave no answer" + (found.ModelProblem is null ? "." : ": " + found.ModelProblem) + " Try again, or choose a file yourself.");
             }
 
             var skip = (record?.Tried ?? []).Select(t => t.Source + "\n" + t.FileId).ToHashSet(StringComparer.Ordinal);
@@ -250,7 +250,7 @@ internal sealed class JobRunner
             }
 
             attempts.AddRange(found.Candidates.Where(c => c.Auto && !skip.Contains(c.File.Source + "\n" + c.File.Id)).Take(MaxAttempts));
-            pickedBy = found.Model ?? "the rules";
+            pickedBy = found.Model ?? "the plugin";
 
             if (attempts.Count == 0)
             {
@@ -374,10 +374,15 @@ internal sealed class JobRunner
                         languageWarning = "the text is " + verdict.Seen + ", not " + languageName + " (" + checker.Name + ")";
                     }
                 }
+                catch (ModelException ex) when (chosenByUser)
+                {
+                    // Someone chose this file. The letters fit, and their choice stands without the model's reading.
+                    _logger.LogWarning("The model could not check the language: {Problem}", ex.Message);
+                }
                 catch (ModelException ex)
                 {
-                    // The letters fit, and that check stands when the model gives no answer.
-                    _logger.LogWarning("The model could not check the language: {Problem}", ex.Message);
+                    // A file the plugin picked by itself is not saved unread.
+                    throw new JobFailedException("The model gave no answer when it was to check the file's language: " + ex.Message + " Try again.");
                 }
             }
 

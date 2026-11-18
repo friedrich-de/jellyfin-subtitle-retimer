@@ -26,14 +26,17 @@ It builds for **Jellyfin 12.4** (.NET 10) and installs through Jellyfin's own pl
    anime and dramas) and [OpenSubtitles](https://www.opensubtitles.com) (many languages).
 2. **Pick.** A model, called through [OpenRouter](https://openrouter.ai) with your key, chooses the
    source's entry for the show and matches the listed files to the season's episodes. It only ever
-   chooses among files the sources list. Without a model, or when it gives no answer, the plugin
-   picks by ids and by the episode number in the file name, or stops and asks, as you set it.
+   chooses among files the sources list. The model is required: the plugin picks no file without
+   one. With no key or no model in the settings, "Get subtitle" and "Get all missing" are off and
+   the page says what is missing. When the model gives no answer, the job fails and can be tried
+   again. Choosing a file yourself always works.
    What a name plainly says stands over the model's order: a plain file goes before one with
    furigana or for the hearing impaired, and those before one that names a second language.
 3. **Check the language.** A sample of the downloaded file is checked by its script, and by the
    model for languages that share a script. A file in another language is skipped and the next one
    is tried, three files at most. The plugin remembers the release for the show, so its files for
-   the other episodes are tried last and the picker says why.
+   the other episodes are tried last and the picker says why. A file the plugin picked is not
+   saved when the model cannot read it. A file you chose is.
 4. **Retime**, if Retimer API is switched on. The plugin cuts the text subtitle tracks out of the
    video with Jellyfin's ffmpeg and sends them with the downloaded subtitle, six at most in one
    job. The tracks in the subtitle's own language and the English ones go first, and a plain track

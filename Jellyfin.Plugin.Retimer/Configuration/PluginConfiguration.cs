@@ -128,15 +128,10 @@ public class PluginConfiguration : BasePluginConfiguration
     public ModelEntry[] Models { get; set; } = [new ModelEntry { Id = DefaultModelId, Name = "Haiku 5.5" }];
 
     /// <summary>
-    /// Gets or sets the id of the model that makes the choices. Empty means no model.
+    /// Gets or sets the id of the model that makes the choices: one of <see cref="Models"/>.
+    /// The plugin picks no file without a model, so the list is never empty.
     /// </summary>
     public string ModelInUse { get; set; } = DefaultModelId;
-
-    /// <summary>
-    /// Gets or sets what happens without a model, or when it gives no answer:
-    /// <c>rules</c> picks by ids and episode numbers, <c>ask</c> stops and asks for a file.
-    /// </summary>
-    public string WithoutModel { get; set; } = "rules";
 
     /// <summary>
     /// Gets or sets the ids of the libraries that do not appear on the page. A new library appears by itself.

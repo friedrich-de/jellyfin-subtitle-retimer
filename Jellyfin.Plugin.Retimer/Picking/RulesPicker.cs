@@ -41,7 +41,9 @@ internal sealed record PickOptions
 }
 
 /// <summary>
-/// Picks files without a model: by the numbers in their names and by what the source says about them.
+/// What the names of files say without a model reading them: episode numbers, kinds of file, and what a
+/// source says about them. These are facts for the model and for a list a person chooses from. Which
+/// entry is a show's and which file is an episode's is the model's to say.
 /// </summary>
 internal static class RulesPicker
 {
@@ -276,107 +278,6 @@ internal static class RulesPicker
 
         return best?.File.Name;
     }
-
-    /// <summary>
-    /// Picks an entry for a show by ids first, then by its names.
-    /// </summary>
-    public static SourceEntry? PickEntry(VideoQuery video, IReadOnlyList<SourceEntry> entries)
-    {
-        if (entries.Count == 0)
-        {
-            return null;
-        }
-
-        var wantedSeason = video.IsMovie ? null : video.Season;
-        var titles = new[] { video.Title, video.OriginalTitle }.Where(t => !string.IsNullOrWhiteSpace(t)).Select(t => Squash(t!)).ToList();
-
-        SourceEntry? best = null;
-        var bestScore = 0;
-        foreach (var entry in entries)
-        {
-            if (entry.IsMovie != video.IsMovie && entries.Any(other => other.IsMovie == video.IsMovie))
-            {
-                continue;
-            }
-
-            var names = new[] { entry.Name, entry.EnglishName, entry.JapaneseName }.Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n!).ToList();
-            var entrySeason = names.Select(SeasonIn).FirstOrDefault(s => s is not null) ?? 1;
-            var score = 0;
-
-            // An AniList id names one season of an anime, so it only settles the first season.
-            if (video.AnilistId is not null && entry.AnilistId == video.AnilistId && (wantedSeason is null or 1))
-            {
-                score += 100;
-            }
-
-            if (video.TmdbId is not null && entry.TmdbId is not null
-                && entry.TmdbId.EndsWith(":" + video.TmdbId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal))
-            {
-                score += 40;
-            }
-
-            var bare = names.Select(n => Squash(StripSeason(n))).ToList();
-            if (titles.Any(bare.Contains))
-            {
-                score += 50;
-            }
-            else if (titles.Any(t => bare.Any(b => b.Length >= 4 && (b.StartsWith(t, StringComparison.Ordinal) || t.StartsWith(b, StringComparison.Ordinal)))))
-            {
-                score += 15;
-            }
-
-            if (wantedSeason is not null)
-            {
-                score += entrySeason == wantedSeason ? 30 : -60;
-            }
-
-            if (score > bestScore)
-            {
-                best = entry;
-                bestScore = score;
-            }
-        }
-
-        return bestScore >= 50 ? best : null;
-    }
-
-    /// <summary>
-    /// The season a title names, such as 2 for "Show 2nd Season" or "Show Season 2".
-    /// </summary>
-    internal static int? SeasonIn(string title)
-    {
-        var lower = title.ToLowerInvariant();
-        foreach (var (mark, season) in new (string, int)[]
-        {
-            ("2nd season", 2), ("second season", 2), ("season 2", 2), ("part 2", 2), ("part ii", 2), ("第2期", 2), ("2ndシーズン", 2), ("第二期", 2),
-            ("3rd season", 3), ("third season", 3), ("season 3", 3), ("part 3", 3), ("part iii", 3), ("第3期", 3), ("3rdシーズン", 3), ("第三期", 3),
-            ("4th season", 4), ("fourth season", 4), ("season 4", 4), ("第4期", 4),
-            ("5th season", 5), ("season 5", 5), ("第5期", 5),
-            ("6th season", 6), ("season 6", 6)
-        })
-        {
-            if (lower.Contains(mark, StringComparison.Ordinal))
-            {
-                return season;
-            }
-        }
-
-        return null;
-    }
-
-    private static string StripSeason(string title)
-    {
-        var lower = title.ToLowerInvariant();
-        foreach (var mark in new[] { "2nd season", "second season", "season 2", "3rd season", "third season", "season 3", "4th season", "season 4", "season 1", "1st season", "2ndシーズン", "3rdシーズン", "第2期", "第3期", "第二期", "第三期" })
-        {
-            lower = lower.Replace(mark, string.Empty, StringComparison.Ordinal);
-        }
-
-        return lower;
-    }
-
-    private static string Squash(string title) =>
-        new(title.ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray());
 
     private static int EpisodeScore(VideoQuery video, SourceFile file, FileGuess guess, List<string> reasons)
     {

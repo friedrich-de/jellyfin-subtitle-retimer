@@ -398,6 +398,15 @@
             var more = [];
             if (!status.MayFetch || !episode.CanSave) { return { main: null, more: [] }; }
             var choose = { text: 'Choose a file', go: function () { location.hash = '#/pick/' + episode.Id; } };
+            if (!status.ModelName) {
+                // Picking a file is the model's part. Without one the page only offers what a person decides.
+                var kept = state === 'raw' || state === 'retimed';
+                var retimeKept = state === 'raw' && episode.CanRetime ? { text: 'Retime', primary: true, go: function () { get(episode, 'retime'); } } : null;
+                return {
+                    main: kept ? retimeKept : choose,
+                    more: kept ? [choose, { text: 'Remove subtitle', go: function () { remove(episode); } }] : []
+                };
+            }
             var plain = status.RetimerReady ? { text: 'Save without retiming', go: function () { get(episode, 'plain'); } } : null;
             var another = { text: 'Try another file', go: function () { get(episode, 'another'); } };
             var removeIt = { text: 'Remove subtitle', go: function () { remove(episode); } };
@@ -540,6 +549,8 @@
                 notices.push('You can look around here. Getting subtitles needs the right to manage subtitles in Jellyfin, which an administrator gives.');
             } else if (data.Sources.length === 0) {
                 notices.push('No subtitle source is set up for ' + data.LanguageName + '.' + (status.IsAdministrator ? ' Set one up in the settings.' : ' Ask the administrator of this server.'));
+            } else if (!status.ModelName) {
+                notices.push('No AI model is set up, and the plugin needs one to pick files.' + (status.IsAdministrator ? ' Add an OpenRouter key and a model in the settings.' : ' Ask the administrator of this server.') + ' Until then you can choose a file yourself.');
             }
             if (status.MayFetch && nearLimit(status.Usage)) {
                 notices.push("Today's limit is close. " + usageText(status.Usage));
@@ -557,7 +568,7 @@
                     h('div', { class: 'stack' },
                         h('label', { for: 'showLanguage', class: 'muted small', text: 'Subtitle language for this ' + (data.IsMovie ? 'film' : 'show') }),
                         language),
-                    status.MayFetch && !data.IsMovie && missingAll.length > 0 ? h('button', { class: 'button primary', text: 'Get all missing (' + missingAll.length + ')', on: { click: function () { getAll(all, data.Name); } } }) : null,
+                    status.MayFetch && status.ModelName && !data.IsMovie && missingAll.length > 0 ? h('button', { class: 'button primary', text: 'Get all missing (' + missingAll.length + ')', on: { click: function () { getAll(all, data.Name); } } }) : null,
                     h('a', { class: 'button quiet', href: base + '/web/#/details?id=' + data.Id, text: 'Open in Jellyfin' })),
                 notices.length > 0 ? h('div', { class: 'section' }, notices.map(function (n) { return h('div', { class: 'notice', text: n }); })) : null);
 
@@ -567,7 +578,7 @@
                     h('div', { class: 'sectionHead' },
                         h('h2', { text: season.Name, class: 'grow' }),
                         h('span', { class: 'muted', text: data.IsMovie ? '' : plural(season.Episodes.length, 'episode', 'episodes') }),
-                        status.MayFetch && data.Seasons.length > 1 && missing.length > 0
+                        status.MayFetch && status.ModelName && data.Seasons.length > 1 && missing.length > 0
                             ? h('button', { class: 'button', text: 'Get missing (' + missing.length + ')', on: { click: function () { getAll(season.Episodes, season.Name); } } })
                             : null));
                 season.Episodes.forEach(function (episode) {
@@ -751,7 +762,10 @@
                 h('h1', { text: 'Choose a subtitle' }),
                 h('p', { class: 'muted', text: data.ShowName + ' · ' + data.ItemLabel + ' · ' + data.LanguageName }),
                 sources,
-                data.ModelProblem ? h('div', { class: 'notice', text: 'The model gave no answer (' + data.ModelProblem + '), so the files are ranked by their names.' }) : null,
+                data.ModelProblem ? h('div', { class: 'notice', text: (status.ModelName
+                    ? 'The model gave no answer (' + data.ModelProblem + '), so no file is suggested.'
+                    : 'No AI model is set up, so no file is suggested. Add an OpenRouter key and a model in the settings to have files picked for you.')
+                    + ' The files are listed in the order their names give.' }) : null,
                 h('h2', { text: 'Files for this ' + (data.IsMovie ? 'film' : 'episode') + ', best first' }),
                 list,
                 data.CanSearchEntries ? wrongShow() : null,
@@ -844,7 +858,7 @@
                 if (active && job.MayCancel) {
                     buttons.append(cancelButton(job, draw));
                 }
-                if (!active && latest && status.MayFetch && (job.State === 'failed' || job.State === 'cancelled' || job.State === 'nofit')) {
+                if (!active && latest && status.MayFetch && (status.ModelName || job.Kind === 'chosen' || job.Kind === 'retime') && (job.State === 'failed' || job.State === 'cancelled' || job.State === 'nofit')) {
                     buttons.append(h('button', { class: 'button', text: 'Try again', on: { click: function () {
                         call('/Retimer/Jobs/' + job.Id + '/Retry', { method: 'POST' }).then(function (answer) {
                             say(answer.Refused || (answer.Skipped ? answer.SkippedBecause : null));
@@ -1003,7 +1017,6 @@
                 OutputFormat: fields.OutputFormat.value,
                 Models: models,
                 ModelInUse: modelInUse,
-                WithoutModel: fields.WithoutModel.value,
                 HiddenLibraryIds: s.Libraries.filter(function (l) { return !fields['lib' + l.Id].checked; }).map(function (l) { return l.Id; }),
                 FetchAccess: fields.FetchAccess.value,
                 MaxJobsPerDay: Math.max(0, parseInt(fields.MaxJobsPerDay.value, 10) || 0),
@@ -1122,7 +1135,7 @@
 
                 h('section', { class: 'panel' },
                     h('h2', { text: 'AI model' }),
-                    h('p', { class: 'hint', text: 'A model chooses whenever the plugin picks by itself: “Get subtitle” and “Get all missing”. It searches the subtitle sources for the show, picks the entry and ranks the files for each episode. After a download it reads a sample of the file and checks that it is in the wanted language. It can only choose among files the sources list, and it never gets the video.' }),
+                    h('p', { class: 'hint', text: 'A model chooses whenever the plugin picks by itself: “Get subtitle” and “Get all missing”. It searches the subtitle sources for the show, picks the entry and ranks the files for each episode. After a download it reads a sample of the file and checks that it is in the wanted language. It can only choose among files the sources list, and it never gets the video. The plugin needs a model: without a key and a model it picks no file, and you can only choose files yourself.' }),
                     secret('OpenRouterApiKey', 'OpenRouter API key', s.HasOpenRouterApiKey, 'From openrouter.ai. The model\'s calls are billed to this key.'),
                     h('h3', { text: 'Models' }),
                     h('p', { class: 'hint', text: 'The model in use makes the choices. The others stay in the list, so you can switch. “Test” saves the settings and asks the model one small question.' }),
@@ -1143,12 +1156,7 @@
                                 newName.value = '';
                                 drawModels();
                             } } }),
-                            addError)),
-                    h('div', { class: 'fieldLabel', text: 'When no model is set, or the model gives no answer' }),
-                    radios('WithoutModel', [
-                        { value: 'rules', text: 'Pick by ids and episode numbers, without a model' },
-                        { value: 'ask', text: 'Stop and ask me to choose a file' }
-                    ], s.WithoutModel)),
+                            addError))),
 
                 h('section', { class: 'panel' },
                     h('h2', { text: 'Libraries' }),

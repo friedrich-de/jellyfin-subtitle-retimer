@@ -267,6 +267,12 @@ internal sealed class PageService
             return (null, new ServiceError(StatusCodes.Status409Conflict, "Retimer API is switched off or not set up."));
         }
 
+        if (kind is JobKind.Get or JobKind.GetPlain or JobKind.Another && _model.Model is null)
+        {
+            // These pick a file by themselves, and picking is the model's part.
+            return (null, new ServiceError(StatusCodes.Status409Conflict, FileFinder.NoModel));
+        }
+
         var started = 0;
         var already = 0;
         var skipped = 0;
@@ -437,7 +443,7 @@ internal sealed class PageService
             return (null, new ServiceError(StatusCodes.Status409Conflict, "No subtitle source is set up for " + view.LanguageName + "."));
         }
 
-        var found = await _finder.FindAsync(video, language, _ => { }, cancellationToken).ConfigureAwait(false);
+        var found = await _finder.FindAsync(video, language, _ => { }, cancellationToken, byHand: true).ConfigureAwait(false);
         _queue.AddCost(found.CostUsd);
 
         var record = _store.Item(itemId, language);

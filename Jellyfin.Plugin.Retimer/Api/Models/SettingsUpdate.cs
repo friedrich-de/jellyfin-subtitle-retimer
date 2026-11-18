@@ -75,9 +75,6 @@ public sealed class SettingsUpdate
     /// <summary>Gets or sets the id of the model that chooses files.</summary>
     public string? ModelInUse { get; set; }
 
-    /// <summary>Gets or sets what happens when no model answers: <c>rules</c> or <c>ask</c>.</summary>
-    public string? WithoutModel { get; set; }
-
     /// <summary>Gets or sets the libraries the page does not show.</summary>
     public Guid[]? HiddenLibraryIds { get; set; }
 

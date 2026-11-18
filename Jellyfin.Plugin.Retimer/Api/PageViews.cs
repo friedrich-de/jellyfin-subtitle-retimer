@@ -40,7 +40,7 @@ internal sealed record StatusView
     /// <summary>Gets a value indicating whether Retimer API is switched on and has an address and a key.</summary>
     public bool RetimerReady { get; init; }
 
-    /// <summary>Gets the name of the model that chooses files, or <c>null</c> when the rules choose.</summary>
+    /// <summary>Gets the name of the model that chooses files, or <c>null</c> when none is set up and nothing is picked.</summary>
     public string? ModelName { get; init; }
 
     /// <summary>Gets today's use against the limits, or <c>null</c> for a user who may not start jobs.</summary>

@@ -71,8 +71,6 @@ internal sealed record SettingsView
 
     public string ModelInUse { get; init; } = string.Empty;
 
-    public string WithoutModel { get; init; } = string.Empty;
-
     public IReadOnlyList<LibraryChoice> Libraries { get; init; } = [];
 
     public string FetchAccess { get; init; } = string.Empty;
@@ -155,7 +153,6 @@ internal sealed partial class SettingsService
             HasOpenRouterApiKey = !string.IsNullOrWhiteSpace(c.OpenRouterApiKey),
             Models = c.Models.Select(m => new ModelEntry { Id = m.Id, Name = m.Name }).ToList(),
             ModelInUse = c.ModelInUse,
-            WithoutModel = c.WithoutModel,
             Libraries = _library.GetAllLibraries().Select(l => new LibraryChoice(l.Id, l.Name, l.Kind, hidden.Contains(l.Id))).ToList(),
             FetchAccess = c.FetchAccess,
             MaxJobsPerDay = c.MaxJobsPerDay,
@@ -214,16 +211,6 @@ internal sealed partial class SettingsService
             c.OutputFormat = update.OutputFormat;
         }
 
-        if (update.WithoutModel is not null)
-        {
-            if (update.WithoutModel is not ("rules" or "ask"))
-            {
-                return (null, Bad("Without a model, the plugin uses the rules or asks."));
-            }
-
-            c.WithoutModel = update.WithoutModel;
-        }
-
         if (update.FetchAccess is not null)
         {
             if (update.FetchAccess is not ("managers" or "everyone"))
@@ -265,6 +252,11 @@ internal sealed partial class SettingsService
                 models.Add(new ModelEntry { Id = id, Name = name.Length == 0 ? id : (name.Length > 60 ? name[..60] : name) });
             }
 
+            if (models.Count == 0)
+            {
+                return (null, Bad("The list needs at least one model. The plugin picks no file without one."));
+            }
+
             if (models.Count > MaxModels)
             {
                 return (null, Bad(string.Create(CultureInfo.InvariantCulture, $"The list holds up to {MaxModels} models.")));
@@ -278,10 +270,16 @@ internal sealed partial class SettingsService
             c.ModelInUse = update.ModelInUse.Trim();
         }
 
+        if (c.Models.Length == 0)
+        {
+            // A settings file from before a model was required, or one edited by hand.
+            c.Models = [new ModelEntry { Id = PluginConfiguration.DefaultModelId, Name = "Haiku 5.5" }];
+        }
+
         if (c.Models.All(m => m.Id != c.ModelInUse))
         {
-            // The model in use is always one of the list. An empty list means the rules choose.
-            c.ModelInUse = c.Models.Length > 0 ? c.Models[0].Id : string.Empty;
+            // The model in use is always one of the list.
+            c.ModelInUse = c.Models[0].Id;
         }
 
         if (update.MaxJobsPerDay is { } jobs)

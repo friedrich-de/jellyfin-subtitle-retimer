@@ -40,24 +40,28 @@ internal sealed record FindResult
 
     public double CostUsd { get; init; }
 
-    /// <summary>Gets the name of the model that ranked the files, or <c>null</c> when the rules did.</summary>
+    /// <summary>Gets the name of the model that ranked the files, or <c>null</c> when it gave no answer.</summary>
     public string? Model { get; init; }
 
-    /// <summary>Gets why the model gave no answer, when it was asked and failed.</summary>
+    /// <summary>Gets why the model gave no answer: none is set up, or it was asked and failed.</summary>
     public string? ModelProblem { get; init; }
 
-    /// <summary>Gets a value indicating whether the search stopped because no model answered and the settings say to ask then.</summary>
+    /// <summary>Gets a value indicating whether the search for a job stopped because the model gave no answer.</summary>
     public bool NeedsChoice { get; init; }
 }
 
 /// <summary>
-/// Searches the sources for a video and ranks what they have, with the model when one is set up and
-/// with the rules otherwise. What the model decided for a show is kept, so a season costs one question.
+/// Searches the sources for a video and has the model rank what they have. The rules read facts from
+/// the names and never pick in the model's place. What the model decided for a show is kept, so a
+/// season costs one question.
 /// </summary>
 internal sealed class FileFinder
 {
     /// <summary>How many kinds of rejected file are kept for a show.</summary>
     internal const int MaxRejectedKinds = 40;
+
+    /// <summary>What a search says when the settings hold no key or no model.</summary>
+    internal const string NoModel = "No AI model is set up. The plugin needs one to pick files: add an OpenRouter key and a model in the settings.";
 
     private static readonly TimeSpan _listLifetime = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan _matchLifetime = TimeSpan.FromDays(30);
@@ -115,26 +119,34 @@ internal sealed class FileFinder
     }
 
     /// <summary>
-    /// Finds and ranks the files for a video.
+    /// Finds and ranks the files for a video. Which entry is the show's and which file is an episode's
+    /// is the model's to say. When it gives no answer, a search for a job stops and says so, and a search
+    /// for someone who chooses by hand lists the files in the order of their names, with none suggested.
     /// </summary>
     /// <param name="video">The video.</param>
     /// <param name="language">The wanted subtitle language.</param>
     /// <param name="note">Told what is going on, for the page.</param>
     /// <param name="cancellationToken">Cancels the search.</param>
+    /// <param name="byHand">Whether a person will choose from the list, so that it is worth having without the model's answer.</param>
     /// <returns>The files, best first.</returns>
-    public async Task<FindResult> FindAsync(VideoInfo video, string language, Action<string?> note, CancellationToken cancellationToken)
+    public async Task<FindResult> FindAsync(VideoInfo video, string language, Action<string?> note, CancellationToken cancellationToken, bool byHand = false)
     {
-        var configuration = _settings.Current;
         var query = ToQuery(video, language);
         var options = Options();
         var model = _model.Model;
-        var useModel = model is not null;
-        string? modelProblem = null;
+        var modelProblem = model is null ? NoModel : null;
         var cost = 0.0;
 
         var reports = new List<SourceReport>();
         var candidates = new List<Candidate>();
         var all = new List<SourceFile>();
+
+        FindResult Stopped() => new() { Sources = reports, CostUsd = cost, ModelProblem = modelProblem, NeedsChoice = true };
+
+        if (modelProblem is not null && !byHand)
+        {
+            return Stopped();
+        }
 
         foreach (var source in _sources.ReadyFor(language))
         {
@@ -150,58 +162,55 @@ internal sealed class FileFinder
                     var key = MatchKey(source.Id, video, language);
                     var match = _store.Show(video.ShowId)?.Matches.GetValueOrDefault(key);
                     var age = match is null ? TimeSpan.MaxValue : DateTimeOffset.UtcNow - match.At;
+
+                    // A match "by the rules" is from a version that picked without a model. It is asked again.
                     var stale = match is null
                         || (match.By != "user" && age > _matchLifetime)
                         || (match.EntryId.Length == 0 && age > _noMatchLifetime)
-                        || (match.By == "rules" && useModel && modelProblem is null);
+                        || match.By == "rules";
+
+                    if (stale && modelProblem is null)
+                    {
+                        var entries = await source.SearchEntriesAsync(query, null, cancellationToken).ConfigureAwait(false);
+                        note(model!.Name + " is looking for the show on " + source.Name);
+                        try
+                        {
+                            var choice = await _model.ChooseEntryAsync(query, source, entries, cancellationToken).ConfigureAwait(false);
+                            cost += choice.CostUsd;
+                            match = new EntryMatch
+                            {
+                                EntryId = choice.Entry?.Id ?? string.Empty,
+                                EntryName = choice.Entry is null ? string.Empty : (choice.Entry.JapaneseName ?? choice.Entry.Name),
+                                By = "model",
+                                Model = model.Name,
+                                Reason = choice.Reason,
+                                At = DateTimeOffset.UtcNow
+                            };
+                            var saved = match;
+                            _store.UpdateShow(video.ShowId, show => show.Matches[key] = saved);
+                            stale = false;
+                        }
+                        catch (ModelException ex)
+                        {
+                            modelProblem = ex.Message;
+                            _logger.LogWarning("The model could not choose an entry on {Source}: {Problem}", source.Name, ex.Message);
+                        }
+
+                        note(null);
+                    }
 
                     if (stale)
                     {
-                        var entries = await source.SearchEntriesAsync(query, null, cancellationToken).ConfigureAwait(false);
-                        SourceEntry? chosen = null;
-                        string by = "rules";
-                        string? reason = null;
-
-                        if (useModel && modelProblem is null)
+                        if (!byHand)
                         {
-                            note(model!.Name + " is looking for the show on " + source.Name);
-                            try
-                            {
-                                var choice = await _model.ChooseEntryAsync(query, source, entries, cancellationToken).ConfigureAwait(false);
-                                cost += choice.CostUsd;
-                                chosen = choice.Entry;
-                                reason = choice.Reason;
-                                by = "model";
-                            }
-                            catch (ModelException ex)
-                            {
-                                modelProblem = ex.Message;
-                                _logger.LogWarning("The model could not choose an entry on {Source}: {Problem}", source.Name, ex.Message);
-                            }
+                            return Stopped();
                         }
 
-                        if (by == "rules")
+                        if (match is null)
                         {
-                            if (useModel && configuration.WithoutModel == "ask")
-                            {
-                                return new FindResult { Sources = reports, CostUsd = cost, ModelProblem = modelProblem, NeedsChoice = true };
-                            }
-
-                            chosen = RulesPicker.PickEntry(query, entries);
+                            reports.Add(new SourceReport(source.Id, source.Name, null, null, 0, null, "No entry is chosen for this " + (video.IsMovie ? "film" : "show and season") + " on " + source.Name + ", because " + (model is null ? "no AI model is set up" : "the model gave no answer") + ". Search for the entry yourself."));
+                            continue;
                         }
-
-                        match = new EntryMatch
-                        {
-                            EntryId = chosen?.Id ?? string.Empty,
-                            EntryName = chosen is null ? string.Empty : (chosen.JapaneseName ?? chosen.Name),
-                            By = by,
-                            Model = by == "model" ? model!.Name : null,
-                            Reason = reason,
-                            At = DateTimeOffset.UtcNow
-                        };
-                        var saved = match;
-                        _store.UpdateShow(video.ShowId, show => show.Matches[key] = saved);
-                        note(null);
                     }
 
                     matchedBy = match!.By switch { "model" => match.Model ?? "the model", "user" => "you", _ => "the rules" };
@@ -231,28 +240,36 @@ internal sealed class FileFinder
                 reports.Add(new SourceReport(source.Id, source.Name, entryId, entryName, files.Count, matchedBy, null));
 
                 // Only the files of an entry need a reader of names. A source that is asked for one episode answers for that episode.
-                if (source.HasEntries && useModel && modelProblem is null && files.Count > 0)
+                if (source.HasEntries && files.Count > 0)
                 {
-                    try
+                    if (modelProblem is null)
                     {
-                        var (mapped, mapCost) = await MapAsync(source, video, query, entryId!, files, options, model!, rejected, note, cancellationToken).ConfigureAwait(false);
-                        cost += mapCost;
-                        var listed = mapped.Select(c => c.File.Id).ToHashSet(StringComparer.Ordinal);
-
-                        // What the model left out stays in the list for the picker, but is not tried unasked.
-                        candidates.AddRange(mapped);
-                        candidates.AddRange(ranked.Where(c => !listed.Contains(c.File.Id)).Select(c => c with { Auto = false, Score = Math.Min(c.Score, 60) }));
-                        continue;
-                    }
-                    catch (ModelException ex)
-                    {
-                        modelProblem = ex.Message;
-                        _logger.LogWarning("The model could not rank the files of {Source}: {Problem}", source.Name, ex.Message);
-                        if (configuration.WithoutModel == "ask")
+                        try
                         {
-                            return new FindResult { Sources = reports, CostUsd = cost, ModelProblem = modelProblem, NeedsChoice = true };
+                            var (mapped, mapCost) = await MapAsync(source, video, query, entryId!, files, options, model!, rejected, note, cancellationToken).ConfigureAwait(false);
+                            cost += mapCost;
+                            var listed = mapped.Select(c => c.File.Id).ToHashSet(StringComparer.Ordinal);
+
+                            // What the model left out stays in the list for the picker, but is not tried unasked.
+                            candidates.AddRange(mapped);
+                            candidates.AddRange(ranked.Where(c => !listed.Contains(c.File.Id)).Select(c => c with { Auto = false, Score = Math.Min(c.Score, 60) }));
+                            continue;
+                        }
+                        catch (ModelException ex)
+                        {
+                            modelProblem = ex.Message;
+                            _logger.LogWarning("The model could not rank the files of {Source}: {Problem}", source.Name, ex.Message);
                         }
                     }
+
+                    if (!byHand)
+                    {
+                        return Stopped();
+                    }
+
+                    // For someone who chooses by hand the files come in the order of their names. None is tried unasked.
+                    candidates.AddRange(ranked.Select(c => c with { Auto = false }));
+                    continue;
                 }
 
                 candidates.AddRange(ranked);
@@ -272,7 +289,7 @@ internal sealed class FileFinder
             Others = all.Where(file => !shown.Contains(file.Source + "\n" + file.Id)).ToList(),
             Sources = reports,
             CostUsd = cost,
-            Model = useModel && modelProblem is null ? model!.Name : null,
+            Model = modelProblem is null ? model!.Name : null,
             ModelProblem = modelProblem
         };
     }

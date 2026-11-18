@@ -566,15 +566,25 @@ public sealed class JobRunnerTests : IDisposable
     public async Task The_episodes_file_is_taken_out_of_a_zip_pack()
     {
         var videos = _w.FateZero(2);
-        _w.Model.Current = null;
         _w.Source.Files.Clear();
         _w.Source.AddFile("Fate Zero 01-13 [BD].zip", "384", bytes: Zip(("Fate Zero - 01.srt", Subtitles.English), ("Fate Zero - 02.srt", Subtitles.Japanese)));
+        _w.Model.Tools["map_files"] = messages =>
+        {
+            // The model names the pack for the episode. Which file inside it is the episode's follows from the names.
+            var user = messages[1]!["content"]!.ToString();
+            var line = user[user.IndexOf("Files:\n", StringComparison.Ordinal)..].Split('\n').First(l => l.Contains("01-13", StringComparison.Ordinal));
+            var index = int.Parse(line[..line.IndexOf(' ', StringComparison.Ordinal)], CultureInfo.InvariantCulture);
+            return new JsonObject
+            {
+                ["episodes"] = new JsonArray(new JsonObject { ["episode"] = 2, ["files"] = new JsonArray(index), ["reason"] = "the pack holds episodes 1 to 13" })
+            };
+        };
 
         var job = await _w.RunAsync(_w.JobFor(videos[1]), Token);
 
         Assert.Equal(JobState.SavedRaw, job.State);
         Assert.Equal(Subtitles.Japanese, Encoding.UTF8.GetString(Assert.Single(_w.Library.Saved).Content));
-        Assert.Equal("the rules", _w.Store.Item(videos[1].Id, "ja")!.PickedBy);
+        Assert.Equal("Test Model", _w.Store.Item(videos[1].Id, "ja")!.PickedBy);
     }
 
     [Fact]
@@ -655,30 +665,110 @@ public sealed class JobRunnerTests : IDisposable
     }
 
     [Fact]
-    public async Task Without_an_answer_from_the_model_the_rules_pick_when_the_settings_say_so()
+    public async Task Without_an_answer_from_the_model_the_job_fails_and_the_rules_pick_nothing()
     {
         var videos = _w.FateZero();
         _w.Model.Failure = new ModelException(ModelError.Unavailable, "OpenRouter did not answer.");
 
         var job = await _w.RunAsync(_w.JobFor(videos[2]), Token);
 
-        Assert.Equal(JobState.SavedRaw, job.State);
-        Assert.Equal("the rules", _w.Store.Item(videos[2].Id, "ja")!.PickedBy);
-        Assert.Equal("[Group] Fate Zero - 03 [BD].ja.srt", _w.Store.Item(videos[2].Id, "ja")!.FileName);
+        Assert.Equal(JobState.Failed, job.State);
+        Assert.Contains("The model gave no answer: OpenRouter did not answer.", job.Detail, StringComparison.Ordinal);
+        Assert.Contains("Try again, or choose a file yourself", job.Detail, StringComparison.Ordinal);
+        Assert.Empty(_w.Source.Downloads);
+        Assert.Empty(_w.Library.Saved);
+        Assert.Empty(_w.Store.Show(videos[2].ShowId)?.Matches ?? []);
     }
 
     [Fact]
-    public async Task Without_an_answer_from_the_model_the_job_asks_when_the_settings_say_so()
+    public async Task When_the_model_cannot_say_which_file_is_the_episodes_the_job_fails()
     {
         var videos = _w.FateZero();
-        _w.Settings.Current.WithoutModel = "ask";
         _w.Model.Tools.Remove("map_files");
 
         var job = await _w.RunAsync(_w.JobFor(videos[0]), Token);
 
-        Assert.Equal(JobState.NoFit, job.State);
-        Assert.Contains("Choose a file yourself", job.Detail, StringComparison.Ordinal);
+        Assert.Equal(JobState.Failed, job.State);
+        Assert.Contains("choose a file yourself", job.Detail, StringComparison.Ordinal);
+        Assert.Empty(_w.Source.Downloads);
         Assert.Empty(_w.Library.Saved);
+    }
+
+    [Fact]
+    public async Task Without_a_model_set_up_a_job_that_picks_by_itself_fails_before_any_source_is_asked()
+    {
+        var videos = _w.FateZero();
+        _w.Model.Current = null;
+
+        var job = await _w.RunAsync(_w.JobFor(videos[0]), Token);
+
+        Assert.Equal(JobState.Failed, job.State);
+        Assert.Equal(FileFinder.NoModel, job.Detail);
+        Assert.Empty(_w.Source.Searches);
+        Assert.Empty(_w.Library.Saved);
+    }
+
+    [Fact]
+    public async Task A_file_the_plugin_picked_is_not_saved_when_the_model_cannot_read_its_language()
+    {
+        var videos = _w.FateZero();
+        _w.Model.Tools.Remove("language_verdict");
+
+        var job = await _w.RunAsync(_w.JobFor(videos[0]), Token);
+
+        Assert.Equal(JobState.Failed, job.State);
+        Assert.Contains("check the file's language", job.Detail, StringComparison.Ordinal);
+        Assert.Empty(_w.Library.Saved);
+    }
+
+    [Fact]
+    public async Task A_file_chosen_by_hand_is_saved_also_when_no_model_is_set_up()
+    {
+        var videos = _w.FateZero(2);
+        _w.Model.Current = null;
+        var file = _w.Source.Files[0];
+        var job = _w.JobFor(videos[0], JobKind.Chosen);
+        job.ChosenSource = file.Source;
+        job.ChosenEntryId = file.EntryId;
+        job.ChosenFileId = file.Id;
+
+        await _w.RunAsync(job, Token);
+
+        Assert.Equal(JobState.SavedRaw, job.State);
+        Assert.Equal("you", _w.Store.Item(videos[0].Id, "ja")!.PickedBy);
+        Assert.Empty(_w.Model.Calls);
+    }
+
+    [Fact]
+    public async Task The_picker_lists_the_files_by_their_names_and_suggests_none_when_the_model_gives_no_answer()
+    {
+        var videos = _w.FateZero();
+        await _w.RunAsync(_w.JobFor(videos[0]), Token);
+        _w.Store.UpdateShow(videos[0].ShowId, show => show.Mappings.Clear());
+        _w.Model.Failure = new ModelException(ModelError.Unavailable, "OpenRouter did not answer.");
+
+        var (view, error) = await _w.Page.FilesAsync(_w.Admin, videos[1].Id, Token);
+
+        Assert.Null(error);
+        Assert.Equal("OpenRouter did not answer.", view!.ModelProblem);
+        Assert.Null(view.Model);
+        Assert.Equal("[Group] Fate Zero - 02 [BD].ja.srt", view.Files[0].Name);
+        Assert.All(view.Files, file => Assert.Null(file.SuggestedBy));
+    }
+
+    [Fact]
+    public async Task The_picker_says_that_no_entry_is_chosen_when_no_model_is_set_up()
+    {
+        var videos = _w.FateZero();
+        _w.Model.Current = null;
+
+        var (view, error) = await _w.Page.FilesAsync(_w.Admin, videos[1].Id, Token);
+
+        Assert.Null(error);
+        Assert.Equal(FileFinder.NoModel, view!.ModelProblem);
+        Assert.Empty(view.Files);
+        Assert.Contains("because no AI model is set up. Search for the entry yourself", Assert.Single(view.Sources).Problem, StringComparison.Ordinal);
+        Assert.True(view.CanSearchEntries);
     }
 
     [Fact]

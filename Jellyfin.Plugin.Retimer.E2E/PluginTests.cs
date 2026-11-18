@@ -438,6 +438,39 @@ public class PluginTests(JellyfinServer server) : IClassFixture<JellyfinServer>
     }
 
     [Fact]
+    public async Task Without_a_model_key_no_job_that_picks_by_itself_starts_and_the_status_says_so()
+    {
+        JellyfinServer.RequireEnabled();
+        var settings = server.StandInSettings();
+        settings.Remove("OpenRouterApiKey");
+        settings["ClearSecrets"] = new JsonArray("OpenRouterApiKey");
+        await server.SaveSettingsAsync(settings);
+
+        try
+        {
+            var status = (await server.GetJsonAsync("Retimer/Status", server.AdminToken))!;
+            Assert.Null(status["ModelName"]);
+
+            foreach (var kind in new[] { "get", "plain", "another" })
+            {
+                using var refused = await server.SendAsync(HttpMethod.Post, "Retimer/Jobs", server.AdminToken, new JsonObject { ["ItemIds"] = new JsonArray(server.Episodes[5]), ["Kind"] = kind });
+                Assert.Equal(HttpStatusCode.Conflict, refused.StatusCode);
+                Assert.Contains("No AI model is set up", await BodyAsync(refused), StringComparison.Ordinal);
+            }
+
+            // Choosing by hand still works: the picker answers, and says why nothing is suggested.
+            var files = (await server.GetJsonAsync($"Retimer/Items/{server.Episodes[5]}/Files", server.AdminToken))!;
+            Assert.Contains("No AI model is set up", files["ModelProblem"]!.GetValue<string>(), StringComparison.Ordinal);
+        }
+        finally
+        {
+            await server.SaveSettingsAsync(server.StandInSettings());
+        }
+
+        Assert.NotNull((await server.GetJsonAsync("Retimer/Status", server.AdminToken))!["ModelName"]);
+    }
+
+    [Fact]
     public async Task The_picker_lists_the_sources_files_for_an_episode()
     {
         JellyfinServer.RequireEnabled();

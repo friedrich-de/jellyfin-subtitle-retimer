@@ -192,37 +192,6 @@ public class PickingTests
     }
 
     [Fact]
-    public void The_entry_is_matched_by_id_for_the_first_season_and_by_the_season_in_its_name_after_that()
-    {
-        var entries = new List<SourceEntry>
-        {
-            new() { Source = "jimaku", Id = "5795", Name = "Fate/Zero Cafe", AnilistId = 20791 },
-            new() { Source = "jimaku", Id = "5724", Name = "Fate/Zero 2nd Season", AnilistId = 11741 },
-            new() { Source = "jimaku", Id = "384", Name = "Fate/Zero", AnilistId = 10087 }
-        };
-
-        var first = RulesPicker.PickEntry(new VideoQuery { Title = "Fate/Zero", Season = 1, Episode = 1, AnilistId = 10087, Language = "ja" }, entries);
-        var second = RulesPicker.PickEntry(new VideoQuery { Title = "Fate/Zero", Season = 2, Episode = 1, AnilistId = 10087, Language = "ja" }, entries);
-        var byTitle = RulesPicker.PickEntry(new VideoQuery { Title = "Fate Zero", Season = 1, Episode = 1, Language = "ja" }, entries);
-        var stranger = RulesPicker.PickEntry(new VideoQuery { Title = "Sousou no Frieren", Season = 1, Episode = 1, Language = "ja" }, entries);
-
-        Assert.Equal("384", first?.Id);
-        Assert.Equal("5724", second?.Id);
-        Assert.Equal("384", byTitle?.Id);
-        Assert.Null(stranger);
-    }
-
-    [Theory]
-    [InlineData("Fate/Zero 2nd Season", 2)]
-    [InlineData("Mushoku Tensei Season 2", 2)]
-    [InlineData("Spy x Family Part 2", 2)]
-    [InlineData("Fate/Zero", null)]
-    public void The_season_is_read_from_an_entrys_name(string name, int? season)
-    {
-        Assert.Equal(season, RulesPicker.SeasonIn(name));
-    }
-
-    [Fact]
     public void Japanese_text_passes_the_letter_check_and_other_text_does_not()
     {
         var japanese = SubtitleText.Lines("a.srt", Support.Subtitles.Japanese);

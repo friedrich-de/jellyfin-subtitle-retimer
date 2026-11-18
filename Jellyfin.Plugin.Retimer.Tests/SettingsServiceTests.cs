@@ -70,7 +70,6 @@ public sealed class SettingsServiceTests : IDisposable
         Assert.Equal("managers", view.FetchAccess);
         Assert.Equal("anthropic/claude-haiku-5.5", view.ModelInUse);
         Assert.Equal("Haiku 5.5", Assert.Single(view.Models).Name);
-        Assert.Equal("rules", view.WithoutModel);
         Assert.True(view.MaxJobsPerDay > 0 && view.MaxCostPerDay > 0);
     }
 
@@ -111,7 +110,7 @@ public sealed class SettingsServiceTests : IDisposable
     [InlineData("{\"PreferredSource\":\"subdl\"}")]
     [InlineData("{\"SendAudio\":\"sometimes\"}")]
     [InlineData("{\"OutputFormat\":\"vtt\"}")]
-    [InlineData("{\"WithoutModel\":\"guess\"}")]
+    [InlineData("{\"Models\":[]}")]
     [InlineData("{\"FetchAccess\":\"nobody\"}")]
     [InlineData("{\"RetimerUrl\":\"ftp://retimer.example.org\"}")]
     [InlineData("{\"RetimerUrl\":\"https://user:pw@retimer.example.org\"}")]
@@ -148,8 +147,20 @@ public sealed class SettingsServiceTests : IDisposable
         Assert.Null(_service.Save(new SettingsUpdate { Models = [new ModelEntry { Id = "anthropic/claude-haiku-5.5" }] }).Error);
         Assert.Equal("anthropic/claude-haiku-5.5", _w.Settings.Current.ModelInUse);
 
-        Assert.Null(_service.Save(new SettingsUpdate { Models = [] }).Error);
-        Assert.Equal(string.Empty, _w.Settings.Current.ModelInUse);
+        // The list is never empty, because the plugin picks no file without a model.
+        Assert.Equal(StatusCodes.Status400BadRequest, _service.Save(new SettingsUpdate { Models = [] }).Error!.Status);
+        Assert.Equal("anthropic/claude-haiku-5.5", _w.Settings.Current.ModelInUse);
+    }
+
+    [Fact]
+    public void A_settings_file_without_a_model_gets_the_default_one_on_the_next_save()
+    {
+        _w.Settings.Current = new PluginConfiguration { Models = [], ModelInUse = string.Empty };
+
+        Assert.Null(_service.Save(new SettingsUpdate { RemoveSongs = true }).Error);
+
+        Assert.Equal("anthropic/claude-haiku-5.5", Assert.Single(_w.Settings.Current.Models).Id);
+        Assert.Equal("anthropic/claude-haiku-5.5", _w.Settings.Current.ModelInUse);
     }
 
     [Fact]

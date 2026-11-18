@@ -3,351 +3,43 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="robots" content="noindex">
+    <meta name="color-scheme" content="dark">
     <title>Subtitle Retimer</title>
-    <style>
-        :root {
-            color-scheme: dark light;
-            --bg: #101010;
-            --panel: #1c1c1c;
-            --line: #333;
-            --text: #eee;
-            --muted: #a0a0a0;
-            --accent: #00a4dc;
-            --accent-text: #fff;
-            --warn: #f0b429;
-        }
-
-        @media (prefers-color-scheme: light) {
-            :root {
-                --bg: #f4f4f4;
-                --panel: #fff;
-                --line: #d5d5d5;
-                --text: #1a1a1a;
-                --muted: #5c5c5c;
-                --accent: #00789f;
-                --accent-text: #fff;
-                --warn: #8a5a00;
-            }
-        }
-
-        * { box-sizing: border-box; }
-
-        body {
-            margin: 0;
-            background: var(--bg);
-            color: var(--text);
-            font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Noto Sans JP", sans-serif;
-        }
-
-        header, main { max-width: 60rem; margin: 0 auto; padding: 1rem; }
-        header { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
-        header h1 { font-size: 1.4rem; margin: 0; flex: 1 1 auto; }
-        a { color: var(--accent); }
-        .muted { color: var(--muted); }
-        .notice { border-left: 4px solid var(--warn); background: var(--panel); padding: 0.75rem 1rem; margin: 0 0 1rem; }
-        .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
-        form.search { display: grid; grid-template-columns: 2fr 1fr 1fr auto; gap: 0.75rem; align-items: end; }
-        @media (max-width: 40rem) { form.search { grid-template-columns: 1fr; } }
-        label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.2rem; }
-        input {
-            width: 100%; padding: 0.5rem 0.6rem; font: inherit; color: var(--text);
-            background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
-        }
-        input:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-        button {
-            font: inherit; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer;
-            border: 1px solid var(--accent); background: var(--accent); color: var(--accent-text);
-        }
-        button.secondary { background: transparent; color: var(--accent); }
-        button:disabled { opacity: 0.5; cursor: default; }
-        ul.entries { list-style: none; margin: 0; padding: 0; }
-        ul.entries > li { border-top: 1px solid var(--line); padding: 0.9rem 0; }
-        ul.entries > li:first-child { border-top: 0; padding-top: 0; }
-        .entry-head { display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap; }
-        .entry-names { flex: 1 1 18rem; min-width: 0; }
-        .entry-names strong { font-size: 1.05rem; overflow-wrap: anywhere; }
-        .entry-actions { display: flex; gap: 0.5rem; align-items: end; }
-        .entry-actions input { width: 6rem; }
-        table { width: 100%; border-collapse: collapse; margin-top: 0.75rem; font-size: 0.92rem; }
-        th, td { text-align: left; padding: 0.35rem 0.5rem; border-top: 1px solid var(--line); vertical-align: top; }
-        th { color: var(--muted); font-weight: 600; }
-        td.name { overflow-wrap: anywhere; }
-        td.num { white-space: nowrap; text-align: right; }
-        [hidden] { display: none !important; }
-    </style>
+    <link rel="stylesheet" href="Retimer/app.css">
 </head>
 <body>
-    <header>
-        <h1>Subtitle Retimer</h1>
-        <a id="settingsLink" href="#" hidden>Settings</a>
-        <a id="homeLink" href="#">Back to Jellyfin</a>
+    <header class="bar">
+        <a class="iconLink" id="homeLink" href="#" title="Back to Jellyfin" aria-label="Back to Jellyfin">&#8592;</a>
+        <a class="brand" href="#/">Subtitle Retimer</a>
+        <nav class="barLinks" aria-label="Sections">
+            <a id="navShows" href="#/">Your shows</a>
+            <a id="navActivity" href="#/activity">Activity <span id="activeCount" class="count" hidden></span></a>
+            <a id="navSettings" href="#/settings" hidden>Settings</a>
+        </nav>
     </header>
-    <main>
-        <p id="message" class="notice" role="status" aria-live="polite" hidden></p>
 
-        <section id="searchSection" class="panel" hidden>
-            <form id="searchForm" class="search">
-                <div>
-                    <label for="title">Title</label>
-                    <input id="title" name="title" type="search" autocomplete="off" placeholder="Sousou no Frieren">
-                </div>
-                <div>
-                    <label for="anilistId">AniList id</label>
-                    <input id="anilistId" name="anilistId" type="text" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="154587">
-                </div>
-                <div>
-                    <label for="tmdbId">TMDB id</label>
-                    <input id="tmdbId" name="tmdbId" type="text" pattern="(tv|movie):[0-9]+" autocomplete="off" placeholder="tv:209867">
-                </div>
-                <button id="searchButton" type="submit">Search Jimaku</button>
-            </form>
-            <p class="muted" style="margin: 0.75rem 0 0;">An id is tried before the title. Fill in whatever you know.</p>
-        </section>
+    <div id="message" class="message" role="alert" hidden></div>
 
-        <section id="resultsSection" class="panel" aria-live="polite" hidden>
-            <p id="resultsSummary" class="muted" style="margin-top: 0;"></p>
-            <ul id="entries" class="entries"></ul>
-        </section>
-
-        <p id="version" class="muted" style="font-size: 0.85rem;"></p>
+    <main id="view" tabindex="-1">
+        <p class="muted pad">Loading…</p>
     </main>
 
-    <script>
-        (function () {
-            'use strict';
+    <footer class="foot muted">
+        <span id="version"></span>
+    </footer>
 
-            // The page lives at <base>/Retimer, next to the web client at <base>/web/.
-            var base = location.pathname.replace(/\/Retimer\/?$/i, '');
-            var token = null;
+    <dialog id="confirm" class="dialog">
+        <form method="dialog">
+            <h2 id="confirmTitle"></h2>
+            <div id="confirmBody"></div>
+            <div class="row end">
+                <button class="button" value="cancel" id="confirmCancel">Cancel</button>
+                <button class="button primary" value="ok" id="confirmOk">OK</button>
+            </div>
+        </form>
+    </dialog>
 
-            var message = document.getElementById('message');
-            var searchSection = document.getElementById('searchSection');
-            var resultsSection = document.getElementById('resultsSection');
-            var resultsSummary = document.getElementById('resultsSummary');
-            var entriesList = document.getElementById('entries');
-            var searchButton = document.getElementById('searchButton');
-
-            document.getElementById('homeLink').href = base + '/web/';
-
-            function showMessage(text, link) {
-                message.textContent = text;
-                if (link) {
-                    var a = document.createElement('a');
-                    a.href = link.href;
-                    a.textContent = link.text;
-                    message.append(' ', a);
-                }
-                message.hidden = false;
-            }
-
-            function el(tag, text, className) {
-                var node = document.createElement(tag);
-                if (text !== undefined && text !== null) { node.textContent = text; }
-                if (className) { node.className = className; }
-                return node;
-            }
-
-            // The web client keeps the login in the browser's storage for this address.
-            // The page reuses it, so there is no second login and no key of its own.
-            function readTokens() {
-                try {
-                    var stored = JSON.parse(localStorage.getItem('jellyfin_credentials') || '{}');
-                    return (stored.Servers || []).filter(function (s) { return s && s.AccessToken; });
-                } catch (e) {
-                    return [];
-                }
-            }
-
-            function api(path, options) {
-                options = options || {};
-                options.headers = Object.assign({ 'Accept': 'application/json' }, options.headers || {});
-                if (token) { options.headers['Authorization'] = 'MediaBrowser Token="' + token + '"'; }
-                return fetch(base + path, options);
-            }
-
-            function describeError(response) {
-                return response.json().then(function (problem) {
-                    return problem && problem.detail ? problem.detail : 'The request failed (' + response.status + ').';
-                }, function () {
-                    return 'The request failed (' + response.status + ').';
-                });
-            }
-
-            function formatSize(bytes) {
-                if (bytes < 1024) { return bytes + ' B'; }
-                if (bytes < 1024 * 1024) { return (bytes / 1024).toFixed(1) + ' KB'; }
-                return (bytes / 1024 / 1024).toFixed(1) + ' MB';
-            }
-
-            function formatDate(value) {
-                var date = new Date(value);
-                return isNaN(date) ? '' : date.toISOString().slice(0, 10);
-            }
-
-            function renderFiles(container, files) {
-                container.replaceChildren();
-                if (files.length === 0) {
-                    container.append(el('p', 'No files match.', 'muted'));
-                    return;
-                }
-
-                var table = el('table');
-                var head = el('tr');
-                head.append(el('th', 'File'), el('th', 'Size'), el('th', 'Uploaded'));
-                table.append(head);
-                files.forEach(function (file) {
-                    var row = el('tr');
-                    var name = el('td', null, 'name');
-                    // Only a plain https address becomes a link; anything else is shown as text.
-                    if (/^https:\/\//i.test(file.Url)) {
-                        var a = el('a', file.Name);
-                        a.href = file.Url;
-                        a.rel = 'noopener noreferrer';
-                        name.append(a);
-                    } else {
-                        name.textContent = file.Name;
-                    }
-                    row.append(name, el('td', formatSize(file.Size), 'num'), el('td', formatDate(file.LastModified), 'num'));
-                    table.append(row);
-                });
-                container.append(table);
-            }
-
-            function loadFiles(entry, episodeInput, container, button) {
-                var episode = episodeInput.value.trim();
-                var path = '/Retimer/Jimaku/Entries/' + encodeURIComponent(entry.Id) + '/Files';
-                if (episode !== '') { path += '?episode=' + encodeURIComponent(episode); }
-                button.disabled = true;
-                container.replaceChildren(el('p', 'Loading…', 'muted'));
-                api(path).then(function (response) {
-                    if (!response.ok) {
-                        return describeError(response).then(function (text) {
-                            container.replaceChildren(el('p', text, 'muted'));
-                        });
-                    }
-                    return response.json().then(function (files) { renderFiles(container, files); });
-                }).catch(function () {
-                    container.replaceChildren(el('p', 'The server could not be reached.', 'muted'));
-                }).finally(function () { button.disabled = false; });
-            }
-
-            function renderEntries(entries) {
-                entriesList.replaceChildren();
-                resultsSummary.textContent = entries.length === 0
-                    ? 'Jimaku has no entry for this.'
-                    : entries.length + (entries.length === 1 ? ' entry' : ' entries');
-                entries.forEach(function (entry, index) {
-                    var item = el('li');
-                    var head = el('div', null, 'entry-head');
-
-                    var names = el('div', null, 'entry-names');
-                    names.append(el('strong', entry.JapaneseName || entry.Name));
-                    var other = [entry.JapaneseName ? entry.Name : null, entry.EnglishName].filter(Boolean).join(' · ');
-                    if (other) { names.append(el('div', other)); }
-                    var ids = ['Jimaku ' + entry.Id];
-                    if (entry.AnilistId !== null && entry.AnilistId !== undefined) { ids.push('AniList ' + entry.AnilistId); }
-                    if (entry.TmdbId) { ids.push('TMDB ' + entry.TmdbId); }
-                    if (entry.Flags && entry.Flags.Movie) { ids.push('movie'); }
-                    if (entry.Flags && entry.Flags.Unverified) { ids.push('unverified'); }
-                    ids.push('newest file ' + formatDate(entry.LastModified));
-                    names.append(el('div', ids.join(' · '), 'muted'));
-
-                    var actions = el('form', null, 'entry-actions');
-                    var field = el('div');
-                    var inputId = 'episode-' + index;
-                    var label = el('label', 'Episode');
-                    label.htmlFor = inputId;
-                    var episodeInput = el('input');
-                    episodeInput.id = inputId;
-                    episodeInput.type = 'text';
-                    episodeInput.inputMode = 'numeric';
-                    episodeInput.pattern = '[0-9]*';
-                    episodeInput.placeholder = 'all';
-                    field.append(label, episodeInput);
-                    var button = el('button', 'Show files', 'secondary');
-                    button.type = 'submit';
-                    actions.append(field, button);
-
-                    var files = el('div');
-                    actions.addEventListener('submit', function (event) {
-                        event.preventDefault();
-                        loadFiles(entry, episodeInput, files, button);
-                    });
-
-                    head.append(names, actions);
-                    item.append(head, files);
-                    entriesList.append(item);
-                });
-                resultsSection.hidden = false;
-            }
-
-            document.getElementById('searchForm').addEventListener('submit', function (event) {
-                event.preventDefault();
-                var params = new URLSearchParams();
-                var title = document.getElementById('title').value.trim();
-                var anilistId = document.getElementById('anilistId').value.trim();
-                var tmdbId = document.getElementById('tmdbId').value.trim();
-                if (title) { params.set('query', title); }
-                if (anilistId) { params.set('anilistId', anilistId); }
-                if (tmdbId) { params.set('tmdbId', tmdbId); }
-                if ([...params.keys()].length === 0) {
-                    showMessage('Fill in a title or an id first.');
-                    return;
-                }
-
-                message.hidden = true;
-                searchButton.disabled = true;
-                resultsSection.hidden = false;
-                resultsSummary.textContent = 'Searching…';
-                entriesList.replaceChildren();
-                api('/Retimer/Jimaku/Entries?' + params.toString()).then(function (response) {
-                    if (!response.ok) {
-                        return describeError(response).then(function (text) {
-                            resultsSection.hidden = true;
-                            showMessage(text);
-                        });
-                    }
-                    return response.json().then(renderEntries);
-                }).catch(function () {
-                    resultsSection.hidden = true;
-                    showMessage('The server could not be reached.');
-                }).finally(function () { searchButton.disabled = false; });
-            });
-
-            // Tries each stored login until the server accepts one.
-            function signIn(tokens) {
-                if (tokens.length === 0) {
-                    token = null;
-                    showMessage('Sign in to Jellyfin in this browser first, then open this page again.', { href: base + '/web/', text: 'Open Jellyfin' });
-                    return;
-                }
-
-                token = tokens[0].AccessToken;
-                api('/Retimer/Status').then(function (response) {
-                    if (response.status === 401) { return signIn(tokens.slice(1)); }
-                    if (!response.ok) { return describeError(response).then(function (text) { showMessage(text); }); }
-                    return response.json().then(function (status) {
-                        document.getElementById('version').textContent = 'Plugin version ' + status.Version;
-                        if (status.IsAdministrator) {
-                            var settings = document.getElementById('settingsLink');
-                            settings.href = base + '/web/#/configurationpage?name=SubtitleRetimer';
-                            settings.hidden = false;
-                        }
-                        if (!status.JimakuConfigured) {
-                            showMessage(status.IsAdministrator
-                                ? 'Add your Jimaku API key in the settings to search.'
-                                : 'Searching needs a Jimaku API key. Ask the administrator of this server to add one in the plugin\'s settings.');
-                        }
-                        searchSection.hidden = false;
-                    });
-                }).catch(function () {
-                    showMessage('The server could not be reached.');
-                });
-            }
-
-            signIn(readTokens());
-        })();
-    </script>
+    <noscript><p class="pad">This page needs JavaScript.</p></noscript>
+    <script src="Retimer/app.js"></script>
 </body>
 </html>

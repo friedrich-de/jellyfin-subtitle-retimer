@@ -11,30 +11,36 @@ namespace Jellyfin.Plugin.Retimer.E2E;
 
 /// <summary>
 /// Drives the packaged plugin inside a real Jellyfin server over HTTP, as three kinds of caller:
-/// nobody, a normal user and an administrator.
+/// nobody, a normal user and an administrator. Jimaku, OpenRouter and Retimer API are stand-ins
+/// of the fixture; the server, its library, ffmpeg and the plugin are real.
 /// </summary>
 public class PluginTests(JellyfinServer server) : IClassFixture<JellyfinServer>
 {
-    private const string JimakuKey = "e2e-not-a-real-jimaku-key";
-
     private static async Task<string> BodyAsync(HttpResponseMessage response) =>
         await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
 
-    private void ClearJimakuRequests()
+    private async Task<JsonNode> EpisodeAsync(int number, string? token = null)
     {
-        lock (server.JimakuRequests)
-        {
-            server.JimakuRequests.Clear();
-        }
+        var show = (await server.GetJsonAsync("Retimer/Shows/" + server.ShowId, token ?? server.AdminToken))!;
+        return show["Seasons"]!.AsArray().SelectMany(season => season!["Episodes"]!.AsArray()).Single(episode => episode!["Number"]!.GetValue<int>() == number)!;
     }
 
-    private List<(string PathAndQuery, string? Authorization, string? UserAgent)> JimakuRequests()
+    private async Task<List<JsonNode>> SubtitleStreamsAsync(int episode)
     {
-        lock (server.JimakuRequests)
-        {
-            return [.. server.JimakuRequests];
-        }
+        var item = (await server.GetJsonAsync($"Items/{server.Episodes[episode]}?userId={server.ViewerId}", server.ViewerToken))!;
+        return item["MediaStreams"]!.AsArray().Where(stream => stream!["Type"]!.GetValue<string>() == "Subtitle").Select(stream => stream!).ToList();
     }
+
+    private async Task<JsonNode> StartAsync(int episode, string kind = "get")
+    {
+        using var response = await server.SendAsync(HttpMethod.Post, "Retimer/Jobs", server.AdminToken, new JsonObject { ["ItemIds"] = new JsonArray(server.Episodes[episode]), ["Kind"] = kind });
+        var text = await BodyAsync(response);
+        Assert.True(response.IsSuccessStatusCode, $"POST Retimer/Jobs answered {(int)response.StatusCode}: {text}");
+        return JsonNode.Parse(text)!;
+    }
+
+    private string SavedPath(int episode, string extension = "srt") =>
+        Path.Combine(server.SeasonDirectory, $"{JellyfinServer.ShowName} - S01E0{episode}.ja.{extension}");
 
     [Fact]
     public async Task The_plugin_installed_from_a_repository_is_active()
@@ -68,15 +74,17 @@ public class PluginTests(JellyfinServer server) : IClassFixture<JellyfinServer>
     }
 
     [Fact]
-    public async Task The_settings_page_is_served_and_listed_in_the_dashboard_menu()
+    public async Task The_dashboard_lists_the_plugin_and_links_to_its_settings()
     {
         JellyfinServer.RequireEnabled();
 
         using var page = await server.SendAsync(HttpMethod.Get, "web/ConfigurationPage?name=SubtitleRetimer", server.AdminToken);
         Assert.Equal(HttpStatusCode.OK, page.StatusCode);
         var html = await BodyAsync(page);
-        Assert.Contains("id=\"SubtitleRetimerConfigForm\"", html, StringComparison.Ordinal);
-        Assert.Contains(server.PluginGuid, html, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("id=\"SubtitleRetimerSettingsLink\"", html, StringComparison.Ordinal);
+
+        // The keys are typed on the plugin's own page, so this one holds no input field.
+        Assert.DoesNotContain("<input", html, StringComparison.OrdinalIgnoreCase);
 
         var pages = (await server.GetJsonAsync("web/ConfigurationPages?enableInMainMenu=true", server.AdminToken))!.AsArray();
         var listed = Assert.Single(pages, p => p!["Name"]!.GetValue<string>() == "SubtitleRetimer")!;
@@ -84,22 +92,51 @@ public class PluginTests(JellyfinServer server) : IClassFixture<JellyfinServer>
     }
 
     [Fact]
-    public async Task Without_a_login_only_the_empty_page_answers()
+    public async Task Without_a_login_only_the_empty_page_and_its_files_answer()
     {
         JellyfinServer.RequireEnabled();
 
         using var page = await server.SendAsync(HttpMethod.Get, "Retimer");
         Assert.Equal(HttpStatusCode.OK, page.StatusCode);
         Assert.Equal("text/html", page.Content.Headers.ContentType!.MediaType);
-        Assert.Contains("<title>Subtitle Retimer</title>", await BodyAsync(page), StringComparison.Ordinal);
+        var html = await BodyAsync(page);
+        Assert.Contains("<title>Subtitle Retimer</title>", html, StringComparison.Ordinal);
+
+        // The page may load only its own script and styles, and nothing is written into it.
+        var policy = string.Join(' ', page.Headers.GetValues("Content-Security-Policy"));
+        Assert.Contains("default-src 'none'", policy, StringComparison.Ordinal);
+        Assert.Contains("script-src 'self'", policy, StringComparison.Ordinal);
+        Assert.DoesNotContain("unsafe-inline", policy, StringComparison.Ordinal);
+        Assert.DoesNotContain("<script>", html, StringComparison.OrdinalIgnoreCase);
+
+        foreach (var (path, type, marker) in new[] { ("Retimer/app.js", "text/javascript", "'use strict'"), ("Retimer/app.css", "text/css", "--primary") })
+        {
+            using var file = await server.SendAsync(HttpMethod.Get, path);
+            Assert.Equal(HttpStatusCode.OK, file.StatusCode);
+            Assert.Equal(type, file.Content.Headers.ContentType!.MediaType);
+            Assert.Contains(marker, await BodyAsync(file), StringComparison.Ordinal);
+        }
+
+        // With a slash at the end the page's relative links would break, so it sends the browser on.
+        using var handler = new SocketsHttpHandler { UseProxy = false, AllowAutoRedirect = false };
+        using var plain = new HttpClient(handler);
+        using var slash = await plain.GetAsync(new Uri(server.BaseAddress, "Retimer/"), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Found, slash.StatusCode);
+        Assert.Equal("../Retimer", slash.Headers.Location!.OriginalString);
 
         foreach (var (method, path) in new[]
         {
             (HttpMethod.Get, "Retimer/Status"),
-            (HttpMethod.Get, "Retimer/Jimaku/Entries?query=frieren"),
-            (HttpMethod.Get, "Retimer/Jimaku/Entries/1/Files"),
-            (HttpMethod.Post, "Retimer/Test/Jimaku"),
-            (HttpMethod.Post, "Retimer/Test/Retimer")
+            (HttpMethod.Get, "Retimer/Libraries"),
+            (HttpMethod.Get, "Retimer/Shows/" + server.ShowId),
+            (HttpMethod.Get, "Retimer/Jobs"),
+            (HttpMethod.Post, "Retimer/Jobs"),
+            (HttpMethod.Delete, "Retimer/Jobs"),
+            (HttpMethod.Get, $"Retimer/Items/{server.Episodes[3]}/Files"),
+            (HttpMethod.Delete, $"Retimer/Items/{server.Episodes[3]}/Subtitle"),
+            (HttpMethod.Get, "Retimer/Settings"),
+            (HttpMethod.Put, "Retimer/Settings"),
+            (HttpMethod.Post, "Retimer/Test/jimaku")
         })
         {
             using var response = await server.SendAsync(method, path);
@@ -108,210 +145,320 @@ public class PluginTests(JellyfinServer server) : IClassFixture<JellyfinServer>
     }
 
     [Fact]
-    public async Task A_normal_user_gets_the_status_but_no_settings_and_no_checks()
+    public async Task A_normal_user_browses_but_cannot_fetch_or_open_the_settings()
     {
         JellyfinServer.RequireEnabled();
-        await server.SaveSettingsAsync(JimakuKey, server.RetimerUrl, JellyfinServer.GoodRetimerKey);
+        await server.SaveSettingsAsync(server.StandInSettings());
 
-        using var status = await server.SendAsync(HttpMethod.Get, "Retimer/Status", server.ViewerToken);
-        Assert.Equal(HttpStatusCode.OK, status.StatusCode);
-        var text = await BodyAsync(status);
-        var json = JsonNode.Parse(text)!;
-        Assert.Equal(server.PluginVersion, json["Version"]!.GetValue<string>());
-        Assert.True(json["JimakuConfigured"]!.GetValue<bool>());
-        Assert.True(json["RetimerConfigured"]!.GetValue<bool>());
-        Assert.False(json["IsAdministrator"]!.GetValue<bool>());
+        using var statusResponse = await server.SendAsync(HttpMethod.Get, "Retimer/Status", server.ViewerToken);
+        var text = await BodyAsync(statusResponse);
+        var status = JsonNode.Parse(text)!;
+        Assert.Equal(server.PluginVersion, status["Version"]!.GetValue<string>());
+        Assert.Equal(JellyfinServer.ViewerName, status["UserName"]!.GetValue<string>());
+        Assert.False(status["IsAdministrator"]!.GetValue<bool>());
+        Assert.False(status["MayFetch"]!.GetValue<bool>());
+        Assert.True(status["RetimerReady"]!.GetValue<bool>());
 
-        // The plugin's own answer carries neither key nor the retimer's address.
-        Assert.DoesNotContain(JimakuKey, text, StringComparison.Ordinal);
-        Assert.DoesNotContain(JellyfinServer.GoodRetimerKey, text, StringComparison.Ordinal);
-        Assert.DoesNotContain(server.HelperAddress.Authority, text, StringComparison.Ordinal);
-
-        foreach (var (method, path) in new[]
+        // The answer carries no key and not the address of Retimer API.
+        foreach (var secret in new[] { JellyfinServer.GoodJimakuKey, JellyfinServer.GoodRetimerKey, JellyfinServer.GoodOpenRouterKey, server.HelperAddress.Authority })
         {
-            (HttpMethod.Post, "Retimer/Test/Jimaku"),
-            (HttpMethod.Post, "Retimer/Test/Retimer"),
-            (HttpMethod.Get, $"Plugins/{server.PluginGuid}/Configuration"),
-            (HttpMethod.Get, "web/ConfigurationPages")
+            Assert.DoesNotContain(secret, text, StringComparison.Ordinal);
+        }
+
+        // Browsing works with a normal login: the library, its show, the episodes with their state.
+        var libraries = (await server.GetJsonAsync("Retimer/Libraries", server.ViewerToken))!.AsArray();
+        var library = Assert.Single(libraries)!;
+        var shows = (await server.GetJsonAsync($"Retimer/Libraries/{library["Id"]!.GetValue<string>()}/Shows", server.ViewerToken))!.AsArray();
+        var show = Assert.Single(shows)!;
+        Assert.Equal(server.ShowId, show["Id"]!.GetValue<string>());
+        Assert.Equal(3, show["Total"]!.GetValue<int>());
+        Assert.Equal("ja", (await server.GetJsonAsync("Retimer/Shows/" + server.ShowId, server.ViewerToken))!["Language"]!.GetValue<string>());
+
+        foreach (var (method, path, body) in new (HttpMethod, string, JsonNode?)[]
+        {
+            (HttpMethod.Post, "Retimer/Jobs", new JsonObject { ["ItemIds"] = new JsonArray(server.Episodes[5]), ["Kind"] = "get" }),
+            (HttpMethod.Put, $"Retimer/Shows/{server.ShowId}/Language", new JsonObject { ["Language"] = "en" }),
+            (HttpMethod.Delete, $"Retimer/Items/{server.Episodes[5]}/Subtitle", null),
+            (HttpMethod.Delete, "Retimer/Jobs", null),
+            (HttpMethod.Get, "Retimer/Settings", null),
+            (HttpMethod.Put, "Retimer/Settings", new JsonObject { ["FetchAccess"] = "everyone" }),
+            (HttpMethod.Post, "Retimer/Test/jimaku", null),
+            (HttpMethod.Post, "Retimer/Test/retimer", null),
+            (HttpMethod.Get, $"Plugins/{server.PluginGuid}/Configuration", null),
+            (HttpMethod.Get, "web/ConfigurationPages", null)
         })
         {
-            using var response = await server.SendAsync(method, path, server.ViewerToken);
+            using var response = await server.SendAsync(method, path, server.ViewerToken, body);
             Assert.True(response.StatusCode == HttpStatusCode.Forbidden, $"{method} {path} answered {(int)response.StatusCode} to a normal user");
         }
     }
 
     [Fact]
-    public async Task An_administrator_saves_settings_and_reads_them_back()
+    public async Task An_administrator_saves_settings_and_no_key_comes_back()
     {
         JellyfinServer.RequireEnabled();
-        await server.SaveSettingsAsync("key & <one>", "https://retimer.example.org", "rt_two");
+        var settings = server.StandInSettings();
+        settings["JimakuApiKey"] = "key & <one>";
+        settings["RemoveSongs"] = true;
+        settings["Models"] = new JsonArray(
+            new JsonObject { ["Id"] = "anthropic/claude-haiku-5.5", ["Name"] = "Haiku 5.5" },
+            new JsonObject { ["Id"] = "example/other-model", ["Name"] = "Other" });
+        settings["ModelInUse"] = "example/other-model";
 
-        var saved = (await server.GetJsonAsync($"Plugins/{server.PluginGuid}/Configuration", server.AdminToken))!;
-        Assert.Equal("key & <one>", saved["JimakuApiKey"]!.GetValue<string>());
-        Assert.Equal("https://retimer.example.org", saved["RetimerUrl"]!.GetValue<string>());
-        Assert.Equal("rt_two", saved["RetimerApiKey"]!.GetValue<string>());
+        var saved = await server.SaveSettingsAsync(settings);
+        Assert.True(saved["HasJimakuApiKey"]!.GetValue<bool>());
+        Assert.True(saved["RemoveSongs"]!.GetValue<bool>());
+        Assert.Equal("example/other-model", saved["ModelInUse"]!.GetValue<string>());
 
+        using var read = await server.SendAsync(HttpMethod.Get, "Retimer/Settings", server.AdminToken);
+        Assert.Equal("no-store", read.Headers.CacheControl!.ToString());
+        var text = await BodyAsync(read);
+        foreach (var secret in new[] { "key &", JellyfinServer.GoodRetimerKey, JellyfinServer.GoodOpenRouterKey })
+        {
+            Assert.DoesNotContain(secret, text, StringComparison.Ordinal);
+        }
+
+        // The keys are on the server's disk, where Jellyfin keeps every plugin's settings.
         var file = Path.Combine(server.DataDirectory, "plugins", "configurations", "Jellyfin.Plugin.Retimer.xml");
-        Assert.Contains("<RetimerApiKey>rt_two</RetimerApiKey>", await File.ReadAllTextAsync(file, TestContext.Current.CancellationToken), StringComparison.Ordinal);
+        var xml = await File.ReadAllTextAsync(file, TestContext.Current.CancellationToken);
+        Assert.Contains("<JimakuApiKey>key &amp; &lt;one&gt;</JimakuApiKey>", xml, StringComparison.Ordinal);
+        Assert.Contains("<RetimerApiKey>" + JellyfinServer.GoodRetimerKey + "</RetimerApiKey>", xml, StringComparison.Ordinal);
 
-        var status = (await server.GetJsonAsync("Retimer/Status", server.AdminToken))!;
-        Assert.True(status["IsAdministrator"]!.GetValue<bool>());
-    }
-
-    [Fact]
-    public async Task With_nothing_set_up_a_search_says_what_is_missing()
-    {
-        JellyfinServer.RequireEnabled();
-        await server.SaveSettingsAsync(string.Empty, string.Empty, string.Empty);
-
-        var status = (await server.GetJsonAsync("Retimer/Status", server.ViewerToken))!;
-        Assert.False(status["JimakuConfigured"]!.GetValue<bool>());
-        Assert.False(status["RetimerConfigured"]!.GetValue<bool>());
-
-        using var search = await server.SendAsync(HttpMethod.Get, "Retimer/Jimaku/Entries?query=frieren", server.ViewerToken);
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, search.StatusCode);
-        var problem = JsonNode.Parse(await BodyAsync(search))!;
-        Assert.Equal("NotConfigured", problem["title"]!.GetValue<string>());
-        Assert.Contains("No Jimaku API key", problem["detail"]!.GetValue<string>(), StringComparison.Ordinal);
-
-        using var bad = await server.SendAsync(HttpMethod.Get, "Retimer/Jimaku/Entries?tmdbId=209867", server.ViewerToken);
+        // An empty key field keeps the stored key, and a value the plugin does not know is refused.
+        await server.SaveSettingsAsync(new JsonObject { ["JimakuApiKey"] = string.Empty, ["RemoveSongs"] = false });
+        Assert.Contains("key &amp; &lt;one&gt;", await File.ReadAllTextAsync(file, TestContext.Current.CancellationToken), StringComparison.Ordinal);
+        using var bad = await server.SendAsync(HttpMethod.Put, "Retimer/Settings", server.AdminToken, new JsonObject { ["SendAudio"] = "sometimes" });
         Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
-
-        var check = JsonNode.Parse(await BodyAsync(await server.SendAsync(HttpMethod.Post, "Retimer/Test/Retimer", server.AdminToken)))!;
-        Assert.Equal("NotConfigured", check["Status"]!.GetValue<string>());
     }
 
     [Fact]
-    public async Task A_normal_user_finds_a_series_on_Jimaku_and_lists_its_files()
-    {
-        JellyfinServer.RequireEnabled();
-        await server.SaveSettingsAsync(JellyfinServer.GoodJimakuKey, string.Empty, string.Empty);
-        ClearJimakuRequests();
-
-        var entries = (await server.GetJsonAsync("Retimer/Jimaku/Entries?anilistId=154587", server.ViewerToken))!.AsArray();
-
-        // The answer uses Jellyfin's naming, which is what the plugin's page reads.
-        var entry = Assert.Single(entries)!;
-        Assert.Equal(4321, entry["Id"]!.GetValue<long>());
-        Assert.Equal("Sousou no Frieren", entry["Name"]!.GetValue<string>());
-        Assert.Equal("葬送のフリーレン", entry["JapaneseName"]!.GetValue<string>());
-        Assert.Equal("Frieren: Beyond Journey’s End", entry["EnglishName"]!.GetValue<string>());
-        Assert.Equal(154587, entry["AnilistId"]!.GetValue<int>());
-        Assert.Equal("tv:209867", entry["TmdbId"]!.GetValue<string>());
-        Assert.True(entry["Flags"]!["Anime"]!.GetValue<bool>());
-        Assert.False(entry["Flags"]!["Movie"]!.GetValue<bool>());
-        Assert.StartsWith("2024-03-22T15:04:05", entry["LastModified"]!.GetValue<string>(), StringComparison.Ordinal);
-
-        // What reached Jimaku: the bare key and a client name with the plugin's version.
-        var request = Assert.Single(JimakuRequests());
-        Assert.Equal("/jimaku/api/entries/search?anilist_id=154587", request.PathAndQuery);
-        Assert.Equal(JellyfinServer.GoodJimakuKey, request.Authorization);
-        Assert.Equal("jellyfin-plugin-retimer/" + server.PluginVersion, request.UserAgent);
-
-        var all = (await server.GetJsonAsync("Retimer/Jimaku/Entries/4321/Files", server.ViewerToken))!.AsArray();
-        Assert.Equal(2, all.Count);
-        var file = Assert.Single((await server.GetJsonAsync("Retimer/Jimaku/Entries/4321/Files?episode=3", server.ViewerToken))!.AsArray())!;
-        Assert.Equal("[Group] Sousou no Frieren - 03.ja.srt", file["Name"]!.GetValue<string>());
-        Assert.Equal("https://jimaku.cc/entry/4321/download/x-03.srt", file["Url"]!.GetValue<string>());
-        Assert.Equal(34567, file["Size"]!.GetValue<long>());
-        Assert.Equal("/jimaku/api/entries/4321/files?episode=3", JimakuRequests().Last().PathAndQuery);
-
-        // The key went to Jimaku and nowhere else.
-        Assert.DoesNotContain(JellyfinServer.GoodJimakuKey, entries.ToJsonString() + all.ToJsonString(), StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task A_search_tries_the_AniList_id_then_the_TMDB_id_then_the_title()
-    {
-        JellyfinServer.RequireEnabled();
-        await server.SaveSettingsAsync(JellyfinServer.GoodJimakuKey, string.Empty, string.Empty);
-        ClearJimakuRequests();
-
-        var entries = (await server.GetJsonAsync("Retimer/Jimaku/Entries?anilistId=1&tmdbId=movie:2&query=Frieren%20%26%20co", server.ViewerToken))!.AsArray();
-
-        Assert.Equal(4321, Assert.Single(entries)!["Id"]!.GetValue<long>());
-        Assert.Equal(
-            [
-                "/jimaku/api/entries/search?anilist_id=1",
-                "/jimaku/api/entries/search?tmdb_id=movie%3A2",
-                "/jimaku/api/entries/search?query=Frieren%20%26%20co"
-            ],
-            JimakuRequests().Select(r => r.PathAndQuery));
-
-        ClearJimakuRequests();
-        var nothing = (await server.GetJsonAsync("Retimer/Jimaku/Entries?query=no%20such%20show&anime=false", server.ViewerToken))!.AsArray();
-        Assert.Empty(nothing);
-        Assert.Equal("/jimaku/api/entries/search?query=no%20such%20show&anime=false", Assert.Single(JimakuRequests()).PathAndQuery);
-    }
-
-    [Fact]
-    public async Task Jimakus_refusals_reach_the_caller_as_a_status_and_a_sentence()
+    public async Task The_checks_tell_a_good_key_a_bad_key_and_a_dead_address_apart()
     {
         JellyfinServer.RequireEnabled();
 
-        // A key Jimaku rejects: the user cannot fix it, so the source is simply unavailable to them.
-        await server.SaveSettingsAsync("e2e-wrong-key", string.Empty, string.Empty);
-        using (var rejected = await server.SendAsync(HttpMethod.Get, "Retimer/Jimaku/Entries?anilistId=154587", server.ViewerToken))
+        async Task<JsonNode> CheckAsync(string target, JsonObject change, JsonNode? body = null)
         {
-            Assert.Equal(HttpStatusCode.BadGateway, rejected.StatusCode);
-            var problem = JsonNode.Parse(await BodyAsync(rejected))!;
-            Assert.Equal("Unauthorized", problem["title"]!.GetValue<string>());
-            Assert.DoesNotContain("e2e-wrong-key", problem.ToJsonString(), StringComparison.Ordinal);
-        }
+            var settings = server.StandInSettings();
+            foreach (var pair in change)
+            {
+                settings[pair.Key] = pair.Value?.DeepClone();
+            }
 
-        // The administrator's check names the cause.
-        var check = JsonNode.Parse(await BodyAsync(await server.SendAsync(HttpMethod.Post, "Retimer/Test/Jimaku", server.AdminToken)))!;
-        Assert.False(check["Ok"]!.GetValue<bool>());
-        Assert.Equal("Unauthorized", check["Status"]!.GetValue<string>());
-
-        await server.SaveSettingsAsync(JellyfinServer.GoodJimakuKey, string.Empty, string.Empty);
-        check = JsonNode.Parse(await BodyAsync(await server.SendAsync(HttpMethod.Post, "Retimer/Test/Jimaku", server.AdminToken)))!;
-        Assert.True(check["Ok"]!.GetValue<bool>(), check.ToJsonString());
-
-        // A rate limit too long to wait out is passed on with the time to wait.
-        using (var limited = await server.SendAsync(HttpMethod.Get, "Retimer/Jimaku/Entries?query=ratelimit", server.ViewerToken))
-        {
-            Assert.Equal(HttpStatusCode.TooManyRequests, limited.StatusCode);
-            Assert.Equal(TimeSpan.FromSeconds(30), limited.Headers.RetryAfter!.Delta);
-        }
-
-        using var missing = await server.SendAsync(HttpMethod.Get, "Retimer/Jimaku/Entries/999/Files", server.ViewerToken);
-        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
-    }
-
-    [Fact]
-    public async Task The_retimer_check_tells_a_good_key_a_bad_key_and_a_dead_address_apart()
-    {
-        JellyfinServer.RequireEnabled();
-
-        async Task<JsonNode> CheckAsync(string url, string key)
-        {
-            await server.SaveSettingsAsync(string.Empty, url, key);
-            using var response = await server.SendAsync(HttpMethod.Post, "Retimer/Test/Retimer", server.AdminToken);
+            await server.SaveSettingsAsync(settings);
+            using var response = await server.SendAsync(HttpMethod.Post, "Retimer/Test/" + target, server.AdminToken, body);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             return JsonNode.Parse(await BodyAsync(response))!;
         }
 
-        // The plugin really calls out: the stand-in retimer on this machine sees the key arrive.
-        var good = await CheckAsync(server.RetimerUrl, JellyfinServer.GoodRetimerKey);
-        Assert.True(good["Ok"]!.GetValue<bool>(), good.ToJsonString());
-        Assert.Equal("Ok", good["Status"]!.GetValue<string>());
-        lock (server.RetimerKeysSeen)
+        var model = new JsonObject { ["ModelId"] = "anthropic/claude-haiku-5.5" };
+
+        Assert.True((await CheckAsync("jimaku", []))["Ok"]!.GetValue<bool>());
+        Assert.Equal("Unauthorized", (await CheckAsync("jimaku", new JsonObject { ["JimakuApiKey"] = "wrong" }))["Status"]!.GetValue<string>());
+
+        var retimer = await CheckAsync("retimer", []);
+        Assert.True(retimer["Ok"]!.GetValue<bool>());
+        Assert.Contains("up to 6 subtitle tracks", retimer["Message"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal("Unauthorized", (await CheckAsync("retimer", new JsonObject { ["RetimerApiKey"] = "rt_wrong" }))["Status"]!.GetValue<string>());
+        Assert.False((await CheckAsync("retimer", new JsonObject { ["RetimerUrl"] = "http://127.0.0.1:9" }))["Ok"]!.GetValue<bool>());
+
+        Assert.True((await CheckAsync("model", [], model))["Ok"]!.GetValue<bool>());
+        Assert.False((await CheckAsync("model", new JsonObject { ["OpenRouterApiKey"] = "sk-or-wrong" }, model))["Ok"]!.GetValue<bool>());
+
+        using var unknown = await server.SendAsync(HttpMethod.Post, "Retimer/Test/elsewhere", server.AdminToken);
+        Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_subtitle_is_found_retimed_against_the_videos_tracks_saved_and_listed_at_once()
+    {
+        JellyfinServer.RequireEnabled();
+        await server.SaveSettingsAsync(server.StandInSettings());
+        Assert.Equal("none", (await EpisodeAsync(3))["State"]!.GetValue<string>());
+        int before;
+        lock (server.RetimerSubmissions)
         {
-            Assert.Equal("Bearer " + JellyfinServer.GoodRetimerKey, server.RetimerKeysSeen.Last());
+            before = server.RetimerSubmissions.Count;
         }
 
-        var wrong = await CheckAsync(server.RetimerUrl + "/", "rt_wrong");
-        Assert.False(wrong["Ok"]!.GetValue<bool>());
-        Assert.Equal("Unauthorized", wrong["Status"]!.GetValue<string>());
+        var started = await StartAsync(3);
+        Assert.Equal(1, started["Started"]!.GetValue<int>());
+        var job = await server.WaitForJobAsync(server.Episodes[3]);
 
-        var notARetimer = await CheckAsync(new Uri(server.HelperAddress, "nothing-here").AbsoluteUri, JellyfinServer.GoodRetimerKey);
-        Assert.Equal("Unreachable", notARetimer["Status"]!.GetValue<string>());
+        Assert.True(job["State"]!.GetValue<string>() == "saved", "The job ended as " + job.ToJsonString());
+        Assert.Contains("“Full”", job["Detail"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.EndsWith("Moved 7.5 s later.", job["Detail"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.True(job["CostUsd"]!.GetValue<double>() > 0.002);
 
-        var dead = await CheckAsync("http://127.0.0.1:9", JellyfinServer.GoodRetimerKey);
-        Assert.Equal("Unreachable", dead["Status"]!.GetValue<string>());
+        // Retimer API got both tracks of the video, cut out by ffmpeg, with what Jellyfin knows about each.
+        RetimerSubmission sent;
+        lock (server.RetimerSubmissions)
+        {
+            Assert.Equal(before + 1, server.RetimerSubmissions.Count);
+            sent = server.RetimerSubmissions[^1];
+        }
 
-        var invalid = await CheckAsync("retimer.example.org", JellyfinServer.GoodRetimerKey);
-        Assert.Equal("InvalidAddress", invalid["Status"]!.GetValue<string>());
+        Assert.EndsWith(".srt", sent.TargetName, StringComparison.Ordinal);
+        Assert.False(sent.HasAudio);
+        Assert.Equal(2, sent.References.Count);
+        Assert.Contains("Good morning, Mistress Frieren.", sent.References[0], StringComparison.Ordinal);
+        Assert.Contains("FRIEREN", sent.References[1], StringComparison.Ordinal);
+        var tracks = sent.Options["reference_tracks"]!.AsArray();
+        Assert.Equal(["Full", "Signs"], tracks.Select(track => track!["title"]!.GetValue<string>()));
+        Assert.All(tracks, track => Assert.Equal("eng", track!["language"]!.GetValue<string>()));
+        Assert.True(tracks[0]!["default"]!.GetValue<bool>());
+
+        // The file is next to the video, it is what Retimer API returned, and Jellyfin lists it without a scan.
+        var saved = await File.ReadAllTextAsync(SavedPath(3), TestContext.Current.CancellationToken);
+        Assert.Contains(JellyfinServer.RetimedStamp, saved, StringComparison.Ordinal);
+        Assert.Contains("おはようございます", saved, StringComparison.Ordinal);
+        var external = Assert.Single(await SubtitleStreamsAsync(3), stream => stream["IsExternal"]!.GetValue<bool>());
+        Assert.Equal("jpn", external["Language"]!.GetValue<string>());
+
+        var episode = await EpisodeAsync(3, server.ViewerToken);
+        Assert.Equal("retimed", episode["State"]!.GetValue<string>());
+        Assert.True(episode["FromPlugin"]!.GetValue<bool>());
+        Assert.Equal("[Group] Sousou no Frieren - 03.ja.srt", episode["FileName"]!.GetValue<string>());
+
+        // The model was asked for the file and for the language, through OpenRouter's chat API.
+        lock (server.ModelCalls)
+        {
+            Assert.Contains("map_files", server.ModelCalls);
+            Assert.Contains("language_verdict", server.ModelCalls);
+        }
+
+        // A second run for the same episode finds the same two tracks, although Jellyfin now numbers them differently.
+        Assert.Equal(1, (await StartAsync(3, "retime"))["Started"]!.GetValue<int>());
+        var again = await server.WaitForJobAsync(server.Episodes[3]);
+        Assert.True(again["State"]!.GetValue<string>() == "saved", "The second job ended as " + again.ToJsonString());
+        lock (server.RetimerSubmissions)
+        {
+            Assert.Equal(before + 2, server.RetimerSubmissions.Count);
+            Assert.Equal(sent.References, server.RetimerSubmissions[^1].References);
+        }
+
+        // Removing it takes the file away and Jellyfin's entry with it.
+        using (var removed = await server.SendAsync(HttpMethod.Delete, $"Retimer/Items/{server.Episodes[3]}/Subtitle", server.AdminToken))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, removed.StatusCode);
+        }
+
+        Assert.False(File.Exists(SavedPath(3)));
+        Assert.DoesNotContain(await SubtitleStreamsAsync(3), stream => stream["IsExternal"]!.GetValue<bool>());
+        Assert.Equal("none", (await EpisodeAsync(3))["State"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task With_Retimer_API_switched_off_the_subtitle_is_saved_as_downloaded()
+    {
+        JellyfinServer.RequireEnabled();
+        await server.SaveSettingsAsync(server.StandInSettings(retimer: false));
+        int before;
+        lock (server.RetimerSubmissions)
+        {
+            before = server.RetimerSubmissions.Count;
+        }
+
+        Assert.Equal(1, (await StartAsync(4))["Started"]!.GetValue<int>());
+        var job = await server.WaitForJobAsync(server.Episodes[4]);
+
+        Assert.True(job["State"]!.GetValue<string>() == "raw", "The job ended as " + job.ToJsonString());
+        var saved = await File.ReadAllTextAsync(SavedPath(4), TestContext.Current.CancellationToken);
+        Assert.Contains("00:00:01,000", saved, StringComparison.Ordinal);
+        Assert.DoesNotContain(JellyfinServer.RetimedStamp, saved, StringComparison.Ordinal);
+        Assert.Equal("raw", (await EpisodeAsync(4))["State"]!.GetValue<string>());
+        lock (server.RetimerSubmissions)
+        {
+            Assert.Equal(before, server.RetimerSubmissions.Count);
+        }
+    }
+
+    [Fact]
+    public async Task A_video_without_a_subtitle_track_is_saved_without_retiming_and_says_why()
+    {
+        JellyfinServer.RequireEnabled();
+        await server.SaveSettingsAsync(server.StandInSettings());
+
+        Assert.Equal(1, (await StartAsync(5))["Started"]!.GetValue<int>());
+        var job = await server.WaitForJobAsync(server.Episodes[5]);
+
+        Assert.True(job["State"]!.GetValue<string>() == "raw", "The job ended as " + job.ToJsonString());
+        Assert.Contains("no text subtitle track", job["Detail"]!.GetValue<string>(), StringComparison.Ordinal);
+        var episode = await EpisodeAsync(5);
+        Assert.Equal("raw", episode["State"]!.GetValue<string>());
+        Assert.True(episode["CanRetime"]!.GetValue<bool>());
+        Assert.True(File.Exists(SavedPath(5)));
+    }
+
+    [Fact]
+    public async Task The_day_limit_and_a_language_without_a_source_stop_a_job_with_a_sentence()
+    {
+        JellyfinServer.RequireEnabled();
+        var settings = server.StandInSettings();
+        var used = (await server.GetJsonAsync("Retimer/Status", server.AdminToken))!["Usage"]!["Jobs"]!.GetValue<int>();
+        settings["MaxJobsPerDay"] = Math.Max(1, used);
+        await server.SaveSettingsAsync(settings);
+        if (used == 0)
+        {
+            // The limit is at one job, so the first one runs and uses the day up.
+            await StartAsync(5, "another");
+            await server.WaitForJobAsync(server.Episodes[5]);
+        }
+
+        var refused = await StartAsync(5, "another");
+        Assert.Equal(0, refused["Started"]!.GetValue<int>());
+        Assert.Contains("Today's limit of", refused["Refused"]!.GetValue<string>(), StringComparison.Ordinal);
+
+        // Jimaku has Japanese only, and no other source is set up.
+        await server.SaveSettingsAsync(server.StandInSettings());
+        using (var english = await server.SendAsync(HttpMethod.Put, $"Retimer/Shows/{server.ShowId}/Language", server.AdminToken, new JsonObject { ["Language"] = "en" }))
+        {
+            Assert.Equal(HttpStatusCode.NoContent, english.StatusCode);
+        }
+
+        try
+        {
+            var show = (await server.GetJsonAsync("Retimer/Shows/" + server.ShowId, server.AdminToken))!;
+            Assert.Equal("en", show["Language"]!.GetValue<string>());
+            Assert.True(show["OwnLanguage"]!.GetValue<bool>());
+
+            // Episode 5 has no English subtitle, the others carry English tracks.
+            var skipped = await StartAsync(5);
+            Assert.Equal(0, skipped["Started"]!.GetValue<int>());
+            Assert.Contains("No subtitle source is set up for English", skipped["SkippedBecause"]!.GetValue<string>(), StringComparison.Ordinal);
+            Assert.Equal("present", (await EpisodeAsync(4))["State"]!.GetValue<string>());
+
+            using var unknown = await server.SendAsync(HttpMethod.Put, $"Retimer/Shows/{server.ShowId}/Language", server.AdminToken, new JsonObject { ["Language"] = "xx" });
+            Assert.Equal(HttpStatusCode.BadRequest, unknown.StatusCode);
+        }
+        finally
+        {
+            using var back = await server.SendAsync(HttpMethod.Put, $"Retimer/Shows/{server.ShowId}/Language", server.AdminToken, new JsonObject { ["Language"] = string.Empty });
+            Assert.Equal(HttpStatusCode.NoContent, back.StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task The_picker_lists_the_sources_files_for_an_episode()
+    {
+        JellyfinServer.RequireEnabled();
+        await server.SaveSettingsAsync(server.StandInSettings());
+
+        var files = (await server.GetJsonAsync($"Retimer/Items/{server.Episodes[4]}/Files", server.AdminToken))!;
+
+        Assert.Equal("ja", files["Language"]!.GetValue<string>());
+        var source = Assert.Single(files["Sources"]!.AsArray())!;
+        Assert.Equal("4321", source["EntryId"]!.GetValue<string>());
+        var first = files["Files"]!.AsArray()[0]!;
+        Assert.Equal("[Group] Sousou no Frieren - 04.ja.srt", first["Name"]!.GetValue<string>());
+        Assert.True(first["Fits"]!.GetValue<bool>());
+
+        // Files of other episodes are listed too, so a wrong guess can be corrected by hand.
+        Assert.Contains(files["Files"]!.AsArray(), file => file!["Name"]!.GetValue<string>().Contains(" - 03", StringComparison.Ordinal) && !file["Fits"]!.GetValue<bool>());
+
+        // A normal user may look, and another user's library item stays out of reach of a made-up id.
+        using var viewer = await server.SendAsync(HttpMethod.Get, $"Retimer/Items/{server.Episodes[4]}/Files", server.ViewerToken);
+        Assert.Equal(HttpStatusCode.Forbidden, viewer.StatusCode);
+        using var missing = await server.SendAsync(HttpMethod.Get, $"Retimer/Items/{Guid.NewGuid():N}/Files", server.AdminToken);
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
     }
 }

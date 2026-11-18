@@ -9,4 +9,10 @@ public interface IPluginSettings
     /// Gets the current settings.
     /// </summary>
     PluginConfiguration Current { get; }
+
+    /// <summary>
+    /// Stores new settings.
+    /// </summary>
+    /// <param name="configuration">The settings to store.</param>
+    void Save(PluginConfiguration configuration);
 }

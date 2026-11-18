@@ -9,8 +9,7 @@ namespace Jellyfin.Plugin.Retimer.E2E;
 
 /// <summary>
 /// The one test that talks to the real jimaku.cc, to confirm what the stand-in assumes.
-/// It runs only where JIMAKU_API_KEY is set. AniList id 10087 is Fate/Zero, the series in the
-/// project's test library.
+/// It runs only where JIMAKU_API_KEY is set. The fixture's library holds one show, Sousou no Frieren.
 /// </summary>
 public class RealJimakuTests(JellyfinServerWithRealJimaku server) : IClassFixture<JellyfinServerWithRealJimaku>
 {
@@ -25,41 +24,31 @@ public class RealJimakuTests(JellyfinServerWithRealJimaku server) : IClassFixtur
         var key = JellyfinServerWithRealJimaku.RealKey;
 
         // A wrong key first: Jimaku itself says no, and the plugin passes that on in words.
-        await server.SaveSettingsAsync("e2e-wrong-key", string.Empty, string.Empty);
-        var rejected = JsonNode.Parse(await BodyAsync(await server.SendAsync(HttpMethod.Post, "Retimer/Test/Jimaku", server.AdminToken)))!;
+        // No OpenRouter key is set, so the plugin picks by its rules.
+        await server.SaveSettingsAsync(new JsonObject { ["JimakuEnabled"] = true, ["JimakuApiKey"] = "e2e-wrong-key", ["RetimerEnabled"] = false });
+        var rejected = JsonNode.Parse(await BodyAsync(await server.SendAsync(HttpMethod.Post, "Retimer/Test/jimaku", server.AdminToken)))!;
         Assert.Equal("Unauthorized", rejected["Status"]!.GetValue<string>());
 
-        await server.SaveSettingsAsync(key!, string.Empty, string.Empty);
-        var accepted = JsonNode.Parse(await BodyAsync(await server.SendAsync(HttpMethod.Post, "Retimer/Test/Jimaku", server.AdminToken)))!;
+        await server.SaveSettingsAsync(new JsonObject { ["JimakuApiKey"] = key });
+        var accepted = JsonNode.Parse(await BodyAsync(await server.SendAsync(HttpMethod.Post, "Retimer/Test/jimaku", server.AdminToken)))!;
         Assert.True(accepted["Ok"]!.GetValue<bool>(), accepted.ToJsonString());
 
-        // A normal user searches by AniList id.
-        var byId = (await server.GetJsonAsync("Retimer/Jimaku/Entries?anilistId=10087", server.ViewerToken))!.AsArray();
-        var entry = Assert.Single(byId)!;
-        Assert.Equal(10087, entry["AnilistId"]!.GetValue<int>());
-        var entryId = entry["Id"]!.GetValue<long>();
-        Assert.False(string.IsNullOrWhiteSpace(entry["Name"]!.GetValue<string>()));
+        // The title search an administrator uses when the plugin took the wrong show.
+        var episode = server.Episodes[3];
+        var entries = (await server.GetJsonAsync($"Retimer/Items/{episode}/Entries?query=Sousou%20no%20Frieren", server.AdminToken))!.AsArray();
+        Assert.Contains(entries, entry => entry!["Name"]!.GetValue<string>().Contains("Frieren", StringComparison.OrdinalIgnoreCase));
 
-        // The title finds the same entry among its matches.
-        var byTitle = (await server.GetJsonAsync("Retimer/Jimaku/Entries?query=Fate%2FZero", server.ViewerToken))!.AsArray();
-        Assert.Contains(byTitle, e => e!["Id"]!.GetValue<long>() == entryId);
-
-        // Files for one episode are fewer than all files, and each has a name and a download address.
-        var all = (await server.GetJsonAsync($"Retimer/Jimaku/Entries/{entryId}/Files", server.ViewerToken))!.AsArray();
-        var episode = (await server.GetJsonAsync($"Retimer/Jimaku/Entries/{entryId}/Files?episode=2", server.ViewerToken))!.AsArray();
-        Assert.NotEmpty(episode);
-        Assert.True(episode.Count <= all.Count, $"episode filter returned {episode.Count} of {all.Count} files");
-        foreach (var file in episode)
+        // The picker for an episode of the test library's show: the real entry and real files.
+        var files = (await server.GetJsonAsync($"Retimer/Items/{episode}/Files", server.AdminToken))!;
+        var source = Assert.Single(files["Sources"]!.AsArray())!;
+        Assert.Equal("jimaku", source["Source"]!.GetValue<string>());
+        Assert.NotEmpty(files["Files"]!.AsArray());
+        foreach (var file in files["Files"]!.AsArray())
         {
             Assert.False(string.IsNullOrWhiteSpace(file!["Name"]!.GetValue<string>()));
-            Assert.StartsWith("https://", file["Url"]!.GetValue<string>(), StringComparison.Ordinal);
-            Assert.True(file["Size"]!.GetValue<long>() > 0);
         }
 
-        // Nothing the normal user received carries the key.
-        Assert.DoesNotContain(key!, byId.ToJsonString() + byTitle.ToJsonString() + all.ToJsonString(), StringComparison.Ordinal);
-
-        using var missing = await server.SendAsync(HttpMethod.Get, "Retimer/Jimaku/Entries/999999999/Files", server.ViewerToken);
-        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        // Nothing that came back carries the key.
+        Assert.DoesNotContain(key!, entries.ToJsonString() + files.ToJsonString(), StringComparison.Ordinal);
     }
 }

@@ -96,7 +96,15 @@ public sealed class JimakuClient : IJimakuClient
     /// </summary>
     /// <param name="overrideAddress">The value of <see cref="BaseAddressVariable"/>, if any.</param>
     /// <returns>The address, ending in a slash.</returns>
-    internal static Uri ResolveBaseAddress(string? overrideAddress)
+    internal static Uri ResolveBaseAddress(string? overrideAddress) => ResolveBaseAddress(overrideAddress, DefaultBaseAddress);
+
+    /// <summary>
+    /// Picks an API address: the override when it is a usable http or https address, otherwise the fallback.
+    /// </summary>
+    /// <param name="overrideAddress">The value of the environment variable, if any.</param>
+    /// <param name="fallback">The service's own address.</param>
+    /// <returns>The address, ending in a slash.</returns>
+    internal static Uri ResolveBaseAddress(string? overrideAddress, Uri fallback)
     {
         var trimmed = overrideAddress?.Trim();
         if (!string.IsNullOrEmpty(trimmed)
@@ -106,7 +114,7 @@ public sealed class JimakuClient : IJimakuClient
             return parsed;
         }
 
-        return DefaultBaseAddress;
+        return fallback;
     }
 
     /// <inheritdoc />
@@ -210,6 +218,75 @@ public sealed class JimakuClient : IJimakuClient
 
         var path = string.Create(CultureInfo.InvariantCulture, $"entries/{entryId}/files");
         return GetListAsync<JimakuFile>(path + ToQueryString(parameters), cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<byte[]> DownloadAsync(string url, long maxBytes, CancellationToken cancellationToken)
+    {
+        // The address comes from Jimaku's own list, and still it is only followed when it stays at Jimaku.
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var address)
+            || address.Scheme != _baseAddress.Scheme
+            || !string.Equals(address.Host, _baseAddress.Host, StringComparison.OrdinalIgnoreCase)
+            || address.Port != _baseAddress.Port)
+        {
+            throw new JimakuException(JimakuError.BadRequest, "The file's address does not point at Jimaku.");
+        }
+
+        var client = _httpClientFactory.CreateClient(NamedClient.Default);
+        using var request = new HttpRequestMessage(HttpMethod.Get, address);
+        request.Headers.UserAgent.Add(_userAgent);
+        try
+        {
+            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                throw new JimakuException(JimakuError.NotFound, "Jimaku no longer has this file.");
+            }
+
+            if (response.StatusCode == HttpStatusCode.TooManyRequests)
+            {
+                throw new JimakuException(JimakuError.RateLimited, "Jimaku's rate limit was hit.", ReadRetryAfter(response));
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new JimakuException(
+                    JimakuError.Unavailable,
+                    string.Create(CultureInfo.InvariantCulture, $"Jimaku answered with status {(int)response.StatusCode}."));
+            }
+
+            if (response.Content.Headers.ContentLength > maxBytes)
+            {
+                throw new JimakuException(JimakuError.BadRequest, "The file is larger than the plugin accepts.");
+            }
+
+            using var buffer = new System.IO.MemoryStream();
+            var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            await using (stream.ConfigureAwait(false))
+            {
+                var chunk = new byte[81920];
+                int read;
+                while ((read = await stream.ReadAsync(chunk, cancellationToken).ConfigureAwait(false)) > 0)
+                {
+                    if (buffer.Length + read > maxBytes)
+                    {
+                        throw new JimakuException(JimakuError.BadRequest, "The file is larger than the plugin accepts.");
+                    }
+
+                    buffer.Write(chunk, 0, read);
+                }
+            }
+
+            return buffer.ToArray();
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new JimakuException(JimakuError.Unavailable, "Jimaku could not be reached.", innerException: ex);
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new JimakuException(JimakuError.Unavailable, "Jimaku did not answer in time.", innerException: ex);
+        }
     }
 
     private static string ToQueryString(List<KeyValuePair<string, string>> parameters)

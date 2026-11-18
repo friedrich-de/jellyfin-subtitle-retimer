@@ -20,6 +20,8 @@
   <ItemGroup>
     <EmbeddedResource Include="Configuration\configPage.html" />
     <EmbeddedResource Include="Web\index.html" />
+    <EmbeddedResource Include="Web\app.js" />
+    <EmbeddedResource Include="Web\app.css" />
   </ItemGroup>
 
   <ItemGroup>

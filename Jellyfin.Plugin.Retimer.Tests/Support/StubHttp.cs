@@ -22,6 +22,9 @@ public sealed class StubHandler : HttpMessageHandler
 
     public List<SentRequest> Requests { get; } = [];
 
+    /// <summary>Gets the body of each request as text, in the order sent. Empty for a request without one.</summary>
+    public List<string> Bodies { get; } = [];
+
     public StubHandler Json(string body, HttpStatusCode status = HttpStatusCode.OK, params (string Name, string Value)[] headers)
     {
         _answers.Enqueue(() =>
@@ -49,8 +52,9 @@ public sealed class StubHandler : HttpMessageHandler
         return this;
     }
 
-    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        Bodies.Add(request.Content is null ? string.Empty : await request.Content.ReadAsStringAsync(cancellationToken));
         Requests.Add(new SentRequest(
             request.Method,
             request.RequestUri!,
@@ -62,7 +66,7 @@ public sealed class StubHandler : HttpMessageHandler
             throw new InvalidOperationException("The test queued no answer for " + request.RequestUri);
         }
 
-        return Task.FromResult(_answers.Dequeue()());
+        return _answers.Dequeue()();
     }
 }
 

@@ -5,133 +5,38 @@
     <title>Subtitle Retimer</title>
 </head>
 <body>
-    <div id="SubtitleRetimerConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button">
+    <div id="SubtitleRetimerConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-button">
         <div data-role="content">
             <div class="content-primary">
-                <form id="SubtitleRetimerConfigForm">
-                    <div class="verticalSection">
-                        <div class="sectionTitleContainer flex align-items-center">
-                            <h2 class="sectionTitle">Subtitle Retimer</h2>
-                        </div>
-                        <p class="fieldDescription">
-                            These keys stay on this server. Only administrators can read or change them.
-                            All signed-in users can search for subtitles on the
-                            <a is="emby-linkbutton" class="button-link" id="SubtitleRetimerUserPageLink" href="#" target="_blank" rel="noopener">Subtitle Retimer page</a>.
-                        </p>
+                <div class="verticalSection">
+                    <div class="sectionTitleContainer flex align-items-center">
+                        <h2 class="sectionTitle">Subtitle Retimer</h2>
                     </div>
-
-                    <div class="verticalSection">
-                        <h3 class="sectionTitle">Jimaku</h3>
-                        <div class="inputContainer">
-                            <label class="inputLabel inputLabelUnfocused" for="SubtitleRetimerJimakuApiKey">Jimaku API key</label>
-                            <input id="SubtitleRetimerJimakuApiKey" name="JimakuApiKey" type="password" is="emby-input" autocomplete="off" spellcheck="false" />
-                            <div class="fieldDescription">Your own key, from the account page on jimaku.cc.</div>
-                        </div>
-                    </div>
-
-                    <div class="verticalSection">
-                        <h3 class="sectionTitle">Retimer</h3>
-                        <div class="inputContainer">
-                            <label class="inputLabel inputLabelUnfocused" for="SubtitleRetimerUrl">Retimer address</label>
-                            <input id="SubtitleRetimerUrl" name="RetimerUrl" type="url" is="emby-input" autocomplete="off" spellcheck="false" placeholder="https://retimer.example.org" />
-                            <div class="fieldDescription">The hosted service, or your own retimer-api server. Both take the same calls.</div>
-                        </div>
-                        <div class="inputContainer">
-                            <label class="inputLabel inputLabelUnfocused" for="SubtitleRetimerApiKey">Retimer key</label>
-                            <input id="SubtitleRetimerApiKey" name="RetimerApiKey" type="password" is="emby-input" autocomplete="off" spellcheck="false" />
-                            <div class="fieldDescription">The key for that address.</div>
-                        </div>
-                    </div>
-
-                    <div>
-                        <button is="emby-button" type="submit" class="raised button-submit block emby-button">
-                            <span>Save</span>
-                        </button>
-                    </div>
-
-                    <div class="verticalSection" style="margin-top: 2em;">
-                        <h3 class="sectionTitle">Check the connections</h3>
-                        <p class="fieldDescription">Each check saves the settings first. Neither one submits a job or costs anything.</p>
-                        <div style="display: flex; align-items: center; gap: 1em; flex-wrap: wrap; margin-bottom: 0.5em;">
-                            <button is="emby-button" type="button" class="raised emby-button" id="SubtitleRetimerTestJimaku">
-                                <span>Check Jimaku</span>
-                            </button>
-                            <span id="SubtitleRetimerTestJimakuResult" role="status" aria-live="polite"></span>
-                        </div>
-                        <div style="display: flex; align-items: center; gap: 1em; flex-wrap: wrap;">
-                            <button is="emby-button" type="button" class="raised emby-button" id="SubtitleRetimerTestRetimer">
-                                <span>Check the retimer</span>
-                            </button>
-                            <span id="SubtitleRetimerTestRetimerResult" role="status" aria-live="polite"></span>
-                        </div>
-                    </div>
-                </form>
+                    <p class="fieldDescription">
+                        The plugin has its own page. It shows your shows and films, gets subtitles for them, and holds the settings:
+                        the subtitle sources, Retimer API, the AI model, the libraries and who may fetch.
+                        Only administrators can open the settings, and the keys stay on this server.
+                    </p>
+                    <p>
+                        <a is="emby-linkbutton" class="raised button-submit emby-button" id="SubtitleRetimerSettingsLink" href="#" target="_blank" rel="noopener">
+                            <span>Open the settings</span>
+                        </a>
+                        <a is="emby-linkbutton" class="raised emby-button" id="SubtitleRetimerUserPageLink" href="#" target="_blank" rel="noopener">
+                            <span>Open the page</span>
+                        </a>
+                    </p>
+                </div>
             </div>
         </div>
         <script type="text/javascript">
             (function () {
                 'use strict';
 
-                var pluginId = 'e9fdba44-78af-4384-bb85-6df44aa841d8';
                 var page = document.querySelector('#SubtitleRetimerConfigPage');
-                var fields = {
-                    JimakuApiKey: page.querySelector('#SubtitleRetimerJimakuApiKey'),
-                    RetimerUrl: page.querySelector('#SubtitleRetimerUrl'),
-                    RetimerApiKey: page.querySelector('#SubtitleRetimerApiKey')
-                };
-
-                function load() {
-                    Dashboard.showLoadingMsg();
-                    page.querySelector('#SubtitleRetimerUserPageLink').href = ApiClient.getUrl('Retimer');
-                    return ApiClient.getPluginConfiguration(pluginId).then(function (config) {
-                        Object.keys(fields).forEach(function (name) {
-                            fields[name].value = config[name] || '';
-                        });
-                        Dashboard.hideLoadingMsg();
-                    });
-                }
-
-                // Reads the stored settings again before writing, so fields this page does not know are kept.
-                function save() {
-                    return ApiClient.getPluginConfiguration(pluginId).then(function (config) {
-                        Object.keys(fields).forEach(function (name) {
-                            config[name] = fields[name].value.trim();
-                        });
-                        return ApiClient.updatePluginConfiguration(pluginId, config);
-                    });
-                }
-
-                function check(path, output) {
-                    output.textContent = 'Checking…';
-                    save().then(function () {
-                        return ApiClient.ajax({ type: 'POST', url: ApiClient.getUrl(path), dataType: 'json' });
-                    }).then(function (result) {
-                        output.textContent = (result.Ok ? '✓ ' : '✗ ') + result.Message;
-                    }, function () {
-                        output.textContent = '✗ The check could not run.';
-                    });
-                }
-
-                page.addEventListener('pageshow', load);
-
-                page.querySelector('#SubtitleRetimerConfigForm').addEventListener('submit', function (event) {
-                    event.preventDefault();
-                    Dashboard.showLoadingMsg();
-                    save().then(function (result) {
-                        Dashboard.processPluginConfigurationUpdateResult(result);
-                    }, function () {
-                        Dashboard.hideLoadingMsg();
-                        Dashboard.alert('The settings could not be saved.');
-                    });
-                    return false;
-                });
-
-                page.querySelector('#SubtitleRetimerTestJimaku').addEventListener('click', function () {
-                    check('Retimer/Test/Jimaku', page.querySelector('#SubtitleRetimerTestJimakuResult'));
-                });
-
-                page.querySelector('#SubtitleRetimerTestRetimer').addEventListener('click', function () {
-                    check('Retimer/Test/Retimer', page.querySelector('#SubtitleRetimerTestRetimerResult'));
+                page.addEventListener('pageshow', function () {
+                    var address = ApiClient.getUrl('Retimer');
+                    page.querySelector('#SubtitleRetimerUserPageLink').href = address;
+                    page.querySelector('#SubtitleRetimerSettingsLink').href = address + '#/settings';
                 });
             })();
         </script>

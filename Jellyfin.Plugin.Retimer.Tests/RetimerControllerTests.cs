@@ -1,16 +1,13 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Security.Claims;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Retimer.Api;
+using Jellyfin.Plugin.Retimer.Api.Models;
 using Jellyfin.Plugin.Retimer.Configuration;
-using Jellyfin.Plugin.Retimer.Jimaku;
-using Jellyfin.Plugin.Retimer.Retimer;
 using Jellyfin.Plugin.Retimer.Tests.Support;
 using MediaBrowser.Common.Api;
 using Microsoft.AspNetCore.Authorization;
@@ -21,38 +18,36 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Jellyfin.Plugin.Retimer.Tests;
 
-public class RetimerControllerTests
+public sealed class RetimerControllerTests : IDisposable
 {
-    private const string JimakuKey = "jimaku-secret-key-0123";
-    private const string RetimerKey = "rt_secret-key-4567";
+    private readonly World _w = new();
+    private readonly FakeCallers _callers = new();
+    private readonly PluginServices _services;
 
-    private readonly StubSettings _settings = new();
-    private readonly FakeJimaku _jimaku = new();
-    private readonly FakeRetimer _retimer = new();
+    public RetimerControllerTests()
+    {
+        _callers.Caller = _w.Admin;
+        _services = new PluginServices(
+            _w.Page,
+            new SettingsService(_w.Settings, _w.Library, _w.Sources, _w.Picker, new FakeRetimer(), _w.Retimer, _w.Queue),
+            _callers);
+    }
 
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
-    private RetimerController Controller(bool administrator = false)
-    {
-        var claims = new List<Claim> { new(ClaimTypes.Name, administrator ? "admin" : "viewer") };
-        if (administrator)
-        {
-            claims.Add(new Claim(ClaimTypes.Role, "Administrator"));
-        }
+    public void Dispose() => _w.Dispose();
 
-        var services = new ServiceCollection().AddLogging().AddMvcCore().Services.BuildServiceProvider();
-        return new RetimerController(_settings, _jimaku, _retimer)
+    private static ControllerContext Context() => new()
+    {
+        HttpContext = new DefaultHttpContext
         {
-            ControllerContext = new ControllerContext
-            {
-                HttpContext = new DefaultHttpContext
-                {
-                    User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test")),
-                    RequestServices = services
-                }
-            }
-        };
-    }
+            RequestServices = new ServiceCollection().AddLogging().AddMvcCore().Services.BuildServiceProvider()
+        }
+    };
+
+    private RetimerController Controller() => new(_services) { ControllerContext = Context() };
+
+    private RetimerSettingsController SettingsController() => new(_services) { ControllerContext = Context() };
 
     private static ProblemDetails Problem(ActionResult result, int expectedStatus)
     {
@@ -61,208 +56,204 @@ public class RetimerControllerTests
         return Assert.IsType<ProblemDetails>(objectResult.Value);
     }
 
-    [Fact]
-    public void Status_says_what_is_set_up_and_never_carries_a_key()
+    private static T Value<T>(ActionResult result) => Assert.IsType<T>(Assert.IsType<OkObjectResult>(result).Value);
+
+    private static string Read(ActionResult result, string expectedType)
     {
-        _settings.Current = new PluginConfiguration { JimakuApiKey = JimakuKey, RetimerUrl = "https://retimer.example.org", RetimerApiKey = RetimerKey };
-
-        var status = Controller().GetStatus().Value!;
-
-        Assert.True(status.JimakuConfigured);
-        Assert.True(status.RetimerConfigured);
-        Assert.False(status.IsAdministrator);
-        Assert.Equal(typeof(Plugin).Assembly.GetName().Version!.ToString(), status.Version);
-
-        var json = JsonSerializer.Serialize(status);
-        Assert.DoesNotContain(JimakuKey, json, StringComparison.Ordinal);
-        Assert.DoesNotContain(RetimerKey, json, StringComparison.Ordinal);
-        Assert.DoesNotContain("retimer.example.org", json, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Status_with_nothing_set_up_says_so_and_knows_an_administrator()
-    {
-        var status = Controller(administrator: true).GetStatus().Value!;
-
-        Assert.False(status.JimakuConfigured);
-        Assert.False(status.RetimerConfigured);
-        Assert.True(status.IsAdministrator);
-    }
-
-    [Fact]
-    public void The_retimer_counts_as_set_up_only_with_both_address_and_key()
-    {
-        _settings.Current = new PluginConfiguration { RetimerUrl = "https://retimer.example.org" };
-        Assert.False(Controller().GetStatus().Value!.RetimerConfigured);
-
-        _settings.Current = new PluginConfiguration { RetimerApiKey = RetimerKey };
-        Assert.False(Controller().GetStatus().Value!.RetimerConfigured);
-    }
-
-    [Fact]
-    public async Task Finding_entries_passes_ids_and_title_on()
-    {
-        var result = await Controller().FindEntries(154587, " tv:209867 ", "Frieren", null, Token);
-
-        var entries = Assert.IsAssignableFrom<IReadOnlyList<JimakuEntry>>(Assert.IsType<OkObjectResult>(result.Result).Value);
-        Assert.Equal(4321, Assert.Single(entries).Id);
-        var lookup = Assert.Single(_jimaku.Lookups);
-        Assert.Equal(154587, lookup.AnilistId);
-        Assert.Equal("tv:209867", lookup.TmdbId);
-        Assert.Equal("Frieren", lookup.Title);
-        Assert.Null(lookup.Anime);
-    }
-
-    [Theory]
-    [InlineData(null, null, null)]
-    [InlineData(null, "  ", "")]
-    [InlineData(-1, null, null)]
-    [InlineData(null, "209867", null)]
-    [InlineData(null, "tv:abc", "Frieren")]
-    public async Task Finding_entries_refuses_bad_input_without_calling_Jimaku(int? anilistId, string? tmdbId, string? query)
-    {
-        var result = await Controller().FindEntries(anilistId, tmdbId, query, null, Token);
-
-        Problem(result.Result!, StatusCodes.Status400BadRequest);
-        Assert.Empty(_jimaku.Lookups);
-    }
-
-    [Theory]
-    [InlineData(JimakuError.NotConfigured, StatusCodes.Status503ServiceUnavailable)]
-    [InlineData(JimakuError.Unauthorized, StatusCodes.Status502BadGateway)]
-    [InlineData(JimakuError.Unavailable, StatusCodes.Status502BadGateway)]
-    [InlineData(JimakuError.NotFound, StatusCodes.Status404NotFound)]
-    [InlineData(JimakuError.BadRequest, StatusCodes.Status400BadRequest)]
-    [InlineData(JimakuError.RateLimited, StatusCodes.Status429TooManyRequests)]
-    public async Task A_Jimaku_failure_becomes_a_fitting_status(JimakuError error, int expectedStatus)
-    {
-        _jimaku.Failure = new JimakuException(error, "What went wrong.");
-
-        var entries = await Controller().FindEntries(1, null, null, null, Token);
-        var files = await Controller().GetFiles(1, null, Token);
-
-        Assert.Equal("What went wrong.", Problem(entries.Result!, expectedStatus).Detail);
-        Assert.Equal(error.ToString(), Problem(files.Result!, expectedStatus).Title);
-    }
-
-    [Fact]
-    public async Task A_rate_limit_tells_the_caller_how_long_to_wait()
-    {
-        _jimaku.Failure = new JimakuException(JimakuError.RateLimited, "Slow down.", TimeSpan.FromSeconds(41.2));
-        var controller = Controller();
-
-        var result = await controller.FindEntries(1, null, null, null, Token);
-
-        Problem(result.Result!, StatusCodes.Status429TooManyRequests);
-        Assert.Equal("42", controller.Response.Headers.RetryAfter.ToString());
-    }
-
-    [Fact]
-    public async Task Files_are_listed_for_an_episode()
-    {
-        var result = await Controller().GetFiles(4321, 3, Token);
-
-        var files = Assert.IsAssignableFrom<IReadOnlyList<JimakuFile>>(Assert.IsType<OkObjectResult>(result.Result).Value);
-        Assert.Equal("03.srt", Assert.Single(files).Name);
-        Assert.Equal((4321L, (int?)3), Assert.Single(_jimaku.FileRequests));
-    }
-
-    [Fact]
-    public async Task A_negative_episode_is_refused()
-    {
-        var result = await Controller().GetFiles(4321, -1, Token);
-
-        Problem(result.Result!, StatusCodes.Status400BadRequest);
-        Assert.Empty(_jimaku.FileRequests);
-    }
-
-    [Fact]
-    public async Task The_Jimaku_check_reports_success_and_failure_in_words()
-    {
-        var ok = (await Controller(administrator: true).TestJimaku(Token)).Value!;
-        Assert.True(ok.Ok);
-        Assert.Equal("Ok", ok.Status);
-        Assert.Equal(1, Assert.Single(_jimaku.Searches).AnilistId);
-
-        _jimaku.Failure = new JimakuException(JimakuError.Unauthorized, "Jimaku rejected the API key.");
-        var failed = (await Controller(administrator: true).TestJimaku(Token)).Value!;
-        Assert.False(failed.Ok);
-        Assert.Equal("Unauthorized", failed.Status);
-        Assert.Equal("Jimaku rejected the API key.", failed.Message);
-    }
-
-    [Theory]
-    [InlineData(RetimerConnectionStatus.Ok, true)]
-    [InlineData(RetimerConnectionStatus.NotConfigured, false)]
-    [InlineData(RetimerConnectionStatus.InvalidAddress, false)]
-    [InlineData(RetimerConnectionStatus.Unreachable, false)]
-    [InlineData(RetimerConnectionStatus.Unauthorized, false)]
-    public async Task The_retimer_check_reports_each_outcome(RetimerConnectionStatus status, bool ok)
-    {
-        _retimer.Status = status;
-
-        var response = (await Controller(administrator: true).TestRetimer(Token)).Value!;
-
-        Assert.Equal(ok, response.Ok);
-        Assert.Equal(status.ToString(), response.Status);
-        Assert.False(string.IsNullOrWhiteSpace(response.Message));
-    }
-
-    [Fact]
-    public async Task The_user_page_is_served_as_html_and_holds_no_settings()
-    {
-        _settings.Current = new PluginConfiguration { JimakuApiKey = JimakuKey, RetimerApiKey = RetimerKey };
-        var controller = Controller();
-
-        var file = Assert.IsType<FileStreamResult>(controller.GetUserPage());
-
-        Assert.Equal("text/html; charset=utf-8", file.ContentType);
-        Assert.Equal("no-cache", controller.Response.Headers.CacheControl.ToString());
-        Assert.Equal("nosniff", controller.Response.Headers.XContentTypeOptions.ToString());
-        Assert.Equal("no-referrer", controller.Response.Headers["Referrer-Policy"].ToString());
-        var policy = controller.Response.Headers.ContentSecurityPolicy.ToString();
-        Assert.Contains("default-src 'none'", policy, StringComparison.Ordinal);
-        Assert.Contains("connect-src 'self'", policy, StringComparison.Ordinal);
-        Assert.Contains("frame-ancestors 'none'", policy, StringComparison.Ordinal);
+        var file = Assert.IsType<FileStreamResult>(result);
+        Assert.Equal(expectedType, file.ContentType);
         using var reader = new StreamReader(file.FileStream);
-        var html = await reader.ReadToEndAsync(Token);
-        Assert.Contains("<title>Subtitle Retimer</title>", html, StringComparison.Ordinal);
-        Assert.DoesNotContain(JimakuKey, html, StringComparison.Ordinal);
-        Assert.DoesNotContain(RetimerKey, html, StringComparison.Ordinal);
+        return reader.ReadToEnd();
     }
 
-    // The rules below are the plugin's whole access model, so a change to them should be a deliberate one.
     [Fact]
-    public void Every_endpoint_needs_a_login_except_the_empty_page()
+    public void The_page_and_its_two_files_are_served_with_a_policy_that_allows_only_this_server()
+    {
+        var controller = Controller();
+
+        var page = Read(controller.GetUserPage(), "text/html; charset=utf-8");
+        var script = Read(controller.GetScript(), "text/javascript; charset=utf-8");
+        var styles = Read(controller.GetStyles(), "text/css; charset=utf-8");
+
+        Assert.Contains("<script src=\"Retimer/app.js\"></script>", page, StringComparison.Ordinal);
+        Assert.Contains("href=\"Retimer/app.css\"", page, StringComparison.Ordinal);
+        Assert.Contains("'/Retimer/Status'", script, StringComparison.Ordinal);
+        Assert.Contains("--primary: #00a4dc", styles, StringComparison.Ordinal);
+
+        var headers = controller.Response.Headers;
+        var policy = headers.ContentSecurityPolicy.ToString();
+        Assert.Contains("default-src 'none'", policy, StringComparison.Ordinal);
+        Assert.Contains("script-src 'self'", policy, StringComparison.Ordinal);
+        Assert.Contains("img-src 'self'", policy, StringComparison.Ordinal);
+        Assert.Contains("frame-ancestors 'none'", policy, StringComparison.Ordinal);
+        Assert.DoesNotContain("unsafe", policy, StringComparison.Ordinal);
+        Assert.Equal("nosniff", headers.XContentTypeOptions.ToString());
+        Assert.Equal("no-referrer", headers["Referrer-Policy"].ToString());
+    }
+
+    [Fact]
+    public void The_page_needs_no_inline_script_or_style_so_the_policy_can_stay_strict()
+    {
+        var page = Read(Controller().GetUserPage(), "text/html; charset=utf-8");
+        var script = Read(Controller().GetScript(), "text/javascript; charset=utf-8");
+
+        Assert.DoesNotContain("<script>", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("<style", page, StringComparison.Ordinal);
+        Assert.DoesNotContain(" style=", page, StringComparison.Ordinal);
+        Assert.DoesNotContain(" onclick=", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("http://", page, StringComparison.Ordinal);
+        Assert.DoesNotContain("https://", page, StringComparison.Ordinal);
+
+        // Text from the server is always set as text, never as markup.
+        Assert.DoesNotContain("innerHTML", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("insertAdjacentHTML", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("eval(", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("setAttribute('style'", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Only_the_page_and_its_files_can_be_fetched_without_a_login()
     {
         Assert.NotNull(typeof(RetimerController).GetCustomAttribute<AuthorizeAttribute>());
 
-        var anonymous = Actions().Where(m => m.GetCustomAttribute<AllowAnonymousAttribute>() is not null).Select(m => m.Name);
-
-        Assert.Equal([nameof(RetimerController.GetUserPage)], anonymous);
-    }
-
-    [Fact]
-    public void Only_the_connection_checks_are_for_administrators_and_they_all_are()
-    {
-        var elevated = Actions()
-            .Where(m => m.GetCustomAttributes<AuthorizeAttribute>().Any(a => a.Policy == Policies.RequiresElevation))
+        var open = typeof(RetimerController).GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+            .Where(m => m.GetCustomAttribute<AllowAnonymousAttribute>() is not null)
             .Select(m => m.Name)
-            .Order();
+            .Order()
+            .ToList();
 
-        Assert.Equal([nameof(RetimerController.TestJimaku), nameof(RetimerController.TestRetimer)], elevated);
+        Assert.Equal(["GetScript", "GetStyles", "GetUserPage"], open);
     }
 
     [Fact]
-    public void No_endpoint_returns_the_settings()
+    public void Every_settings_call_needs_an_administrator()
     {
-        foreach (var action in Actions())
-        {
-            Assert.DoesNotContain(nameof(PluginConfiguration), action.ReturnType.ToString(), StringComparison.Ordinal);
-        }
+        var authorize = typeof(RetimerSettingsController).GetCustomAttribute<AuthorizeAttribute>();
+
+        Assert.Equal(Policies.RequiresElevation, authorize?.Policy);
+        var actions = typeof(RetimerSettingsController).GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+        Assert.NotEmpty(actions);
+        Assert.All(actions, action => Assert.Null(action.GetCustomAttribute<AllowAnonymousAttribute>()));
+        Assert.All(actions, action => Assert.NotNull(action.GetCustomAttribute<HttpMethodAttribute>()));
+
+        // And nothing about settings or tests sits on the controller every user reaches.
+        var open = typeof(RetimerController).GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
+            .SelectMany(m => m.GetCustomAttributes<HttpMethodAttribute>())
+            .Select(a => a.Template ?? string.Empty);
+        Assert.DoesNotContain(open, template => template.StartsWith("Settings", StringComparison.OrdinalIgnoreCase) || template.StartsWith("Test", StringComparison.OrdinalIgnoreCase));
     }
 
-    private static IEnumerable<MethodInfo> Actions() => typeof(RetimerController)
-        .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-        .Where(m => m.GetCustomAttributes().Any(a => a is IActionHttpMethodProvider));
+    [Fact]
+    public async Task A_request_without_a_user_behind_it_gets_nothing()
+    {
+        var videos = _w.FateZero();
+        _callers.Caller = null;
+        var controller = Controller();
+
+        Problem(await controller.GetStatus(), StatusCodes.Status403Forbidden);
+        Problem(await controller.GetLibraries(), StatusCodes.Status403Forbidden);
+        Problem(await controller.GetShows(FakeLibrary.LibraryId), StatusCodes.Status403Forbidden);
+        Problem(await controller.GetShow(videos[0].ShowId), StatusCodes.Status403Forbidden);
+        Problem(await controller.GetJobs(), StatusCodes.Status403Forbidden);
+        Problem(await controller.StartJobs(new StartJobsRequest { ItemIds = [videos[0].Id] }), StatusCodes.Status403Forbidden);
+        Problem(await controller.GetFiles(videos[0].Id, Token), StatusCodes.Status403Forbidden);
+        Problem(await controller.RemoveSubtitle(videos[0].Id, Token), StatusCodes.Status403Forbidden);
+        Problem(await controller.SetLanguage(videos[0].ShowId, new SetLanguageRequest { Language = "en" }), StatusCodes.Status403Forbidden);
+        Problem(await controller.ClearJobs(), StatusCodes.Status403Forbidden);
+        Assert.Empty(_w.Queue.Since(0));
+    }
+
+    [Fact]
+    public async Task A_viewer_can_look_but_not_fetch()
+    {
+        var videos = _w.FateZero();
+        _callers.Caller = _w.Viewer;
+        var controller = Controller();
+
+        Assert.False(Value<StatusView>(await controller.GetStatus()).MayFetch);
+        Assert.Equal("Fate/Zero", Value<ShowDetailView>(await controller.GetShow(videos[0].ShowId)).Name);
+        var refused = Problem(await controller.StartJobs(new StartJobsRequest { ItemIds = [videos[0].Id] }), StatusCodes.Status403Forbidden);
+        Assert.Contains("may not get or change subtitles", refused.Detail, StringComparison.Ordinal);
+        Problem(await controller.GetFiles(videos[0].Id, Token), StatusCodes.Status403Forbidden);
+    }
+
+    [Fact]
+    public async Task What_the_server_spent_is_only_told_to_those_who_may_fetch()
+    {
+        var videos = _w.FateZero();
+        _callers.Caller = _w.Manager;
+        Value<StartView>(await Controller().StartJobs(new StartJobsRequest { ItemIds = [videos[0].Id] }));
+        await _w.Queue.Idle.WaitAsync(TimeSpan.FromSeconds(20), Token);
+        Assert.NotNull(Value<StatusView>(await Controller().GetStatus()).Usage);
+
+        _callers.Caller = _w.Viewer;
+        var controller = Controller();
+        var jobs = Value<JobsView>(await controller.GetJobs());
+
+        // The viewer sees that the job ran, since the show is theirs to see, but no figures.
+        var job = Assert.Single(jobs.Jobs);
+        Assert.Equal(0, job.CostUsd);
+        Assert.False(job.MayCancel);
+        Assert.Equal(string.Empty, job.StepText);
+        Assert.Null(jobs.Usage);
+        Assert.Null(Value<StatusView>(await controller.GetStatus()).Usage);
+    }
+
+    [Fact]
+    public async Task A_manager_gets_a_subtitle_through_the_endpoints()
+    {
+        var videos = _w.FateZero();
+        _callers.Caller = _w.Manager;
+        var controller = Controller();
+
+        var started = Value<StartView>(await controller.StartJobs(new StartJobsRequest { ItemIds = [videos[0].Id] }));
+        await _w.Queue.Idle.WaitAsync(TimeSpan.FromSeconds(20), Token);
+        var jobs = Value<JobsView>(await controller.GetJobs());
+        var show = Value<ShowDetailView>(await controller.GetShow(videos[0].ShowId));
+
+        Assert.Equal(1, started.Started);
+        Assert.Equal("raw", Assert.Single(jobs.Jobs).State);
+        Assert.Equal(1, jobs.Usage!.Jobs);
+        Assert.Equal("raw", show.Seasons[0].Episodes[0].State);
+        Assert.Empty(Value<JobsView>(await controller.GetJobs(jobs.Version)).Jobs);
+
+        Assert.IsType<NoContentResult>(await controller.RemoveSubtitle(videos[0].Id, Token));
+        Assert.Equal("none", Value<ShowDetailView>(await controller.GetShow(videos[0].ShowId)).Seasons[0].Episodes[0].State);
+    }
+
+    [Fact]
+    public async Task What_does_not_exist_is_answered_with_404_and_a_sentence()
+    {
+        var controller = Controller();
+
+        Assert.NotNull(Problem(await controller.GetShow(Guid.NewGuid()), StatusCodes.Status404NotFound).Detail);
+        Problem(await controller.GetShows(Guid.NewGuid()), StatusCodes.Status404NotFound);
+        Problem(await controller.CancelJob("nope"), StatusCodes.Status404NotFound);
+        Problem(await controller.RetryJob("nope"), StatusCodes.Status404NotFound);
+        Problem(await controller.GetFiles(Guid.NewGuid(), Token), StatusCodes.Status404NotFound);
+    }
+
+    [Fact]
+    public async Task The_settings_endpoints_never_answer_with_a_key()
+    {
+        _w.Settings.Current = new PluginConfiguration { JimakuApiKey = "jimaku-secret-0123", RetimerApiKey = "rt_secret-key-4567", OpenRouterApiKey = "sk-or-secret-89", OpenSubtitlesPassword = "os-password" };
+        var controller = SettingsController();
+
+        var read = JsonSerializer.Serialize(Value<SettingsView>(controller.GetSettings()));
+        var saved = JsonSerializer.Serialize(Value<SettingsView>(controller.SaveSettings(new SettingsUpdate { RetimerApiKey = "rt_new-secret", RemoveSongs = true })));
+        var tested = JsonSerializer.Serialize(Value<ConnectionTestResponse>(await controller.Test("retimer", null, Token)));
+
+        foreach (var answer in new[] { read, saved, tested })
+        {
+            foreach (var secret in new[] { "jimaku-secret-0123", "rt_secret-key-4567", "rt_new-secret", "sk-or-secret-89", "os-password" })
+            {
+                Assert.DoesNotContain(secret, answer, StringComparison.Ordinal);
+            }
+        }
+
+        Assert.Equal("no-store", controller.Response.Headers.CacheControl.ToString());
+        Assert.Equal("rt_new-secret", _w.Settings.Current.RetimerApiKey);
+        Problem(controller.SaveSettings(new SettingsUpdate { SendAudio = "sometimes" }), StatusCodes.Status400BadRequest);
+        Problem(await controller.Test("nothing", null, Token), StatusCodes.Status404NotFound);
+    }
 }

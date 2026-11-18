@@ -19,7 +19,8 @@ namespace Jellyfin.Plugin.Retimer.E2E;
 /// <summary>
 /// A throwaway Jellyfin server with the packaged plugin installed the way a user installs it:
 /// from a plugin repository, through Jellyfin's own installer, followed by a restart.
-/// It also plays the plugin repository, a stand-in retimer and a stand-in Jimaku on a local port.
+/// It also plays the plugin repository and stand-ins for Jimaku, OpenRouter and Retimer API on a local port,
+/// and it gives the server a small library: one show with three episodes made by ffmpeg.
 /// </summary>
 /// <remarks>
 /// Needs two environment variables, otherwise the tests are skipped:
@@ -33,6 +34,11 @@ public class JellyfinServer : IAsyncLifetime
     public const string ViewerName = "viewer";
     public const string GoodRetimerKey = "rt_e2e-good-key";
     public const string GoodJimakuKey = "e2e-good-jimaku-key";
+    public const string GoodOpenRouterKey = "sk-or-e2e-good-key";
+    public const string ShowName = "Sousou no Frieren";
+
+    /// <summary>The time the stand-in Retimer API moves the first line to, so a saved file shows that it went through it.</summary>
+    public const string RetimedStamp = "00:00:08,500";
     private const string AdminPassword = "e2e-admin-password";
     private const string ViewerPassword = "e2e-viewer-password";
     private const string ClientHeader = "MediaBrowser Client=\"retimer-e2e\", Device=\"e2e\", DeviceId=\"retimer-e2e-1\", Version=\"1\"";
@@ -50,6 +56,8 @@ public class JellyfinServer : IAsyncLifetime
     private byte[] _zip = [];
     private string _manifest = string.Empty;
     private bool _disposed;
+    private int _retimerJobs;
+    private readonly Dictionary<string, byte[]> _retimerResults = [];
 
     public static string? JellyfinPath => Environment.GetEnvironmentVariable("RETIMER_E2E_JELLYFIN");
 
@@ -79,6 +87,25 @@ public class JellyfinServer : IAsyncLifetime
     public string ViewerToken { get; private set; } = string.Empty;
 
     public string DataDirectory => Path.Combine(_root, "data");
+
+    public string MediaDirectory => Path.Combine(_root, "media");
+
+    public string SeasonDirectory => Path.Combine(MediaDirectory, "shows", ShowName + " (2023)", "Season 01");
+
+    public string OpenRouterUrl => new Uri(HelperAddress, "openrouter").AbsoluteUri;
+
+    public string ViewerId { get; private set; } = string.Empty;
+
+    public string ShowId { get; private set; } = string.Empty;
+
+    /// <summary>Gets the ids of the library's episodes by episode number: 3 and 4 hold two English tracks, 5 holds none.</summary>
+    public Dictionary<int, string> Episodes { get; } = [];
+
+    /// <summary>Gets what the stand-in Retimer API was sent with each job, oldest first.</summary>
+    public List<RetimerSubmission> RetimerSubmissions { get; } = [];
+
+    /// <summary>Gets the tools the stand-in OpenRouter was asked to call, oldest first.</summary>
+    public List<string> ModelCalls { get; } = [];
 
     /// <summary>Gets the bearer keys the stand-in retimer has seen, newest last.</summary>
     public List<string?> RetimerKeysSeen { get; } = [];
@@ -155,9 +182,14 @@ public class JellyfinServer : IAsyncLifetime
             await WaitUntilUpAsync();
             AdminToken = await LoginAsync(AdminName, AdminPassword);
 
-            using var created = await SendAsync(HttpMethod.Post, "Users/New", AdminToken, new JsonObject { ["Name"] = ViewerName, ["Password"] = ViewerPassword });
-            created.EnsureSuccessStatusCode();
+            using (var created = await SendAsync(HttpMethod.Post, "Users/New", AdminToken, new JsonObject { ["Name"] = ViewerName, ["Password"] = ViewerPassword }))
+            {
+                created.EnsureSuccessStatusCode();
+                ViewerId = (await created.Content.ReadFromJsonAsync<JsonNode>(_stopping.Token))!["Id"]!.GetValue<string>();
+            }
+
             ViewerToken = await LoginAsync(ViewerName, ViewerPassword);
+            await CreateLibraryAsync();
         }
         catch (Exception ex)
         {
@@ -223,13 +255,54 @@ public class JellyfinServer : IAsyncLifetime
     }
 
     /// <summary>
-    /// Saves the plugin's settings the way the settings page does.
+    /// Saves the plugin's settings the way its settings screen does, and returns the answer.
     /// </summary>
-    public async Task SaveSettingsAsync(string jimakuApiKey, string retimerUrl, string retimerApiKey)
+    public async Task<JsonNode> SaveSettingsAsync(JsonObject settings)
     {
-        var settings = new JsonObject { ["JimakuApiKey"] = jimakuApiKey, ["RetimerUrl"] = retimerUrl, ["RetimerApiKey"] = retimerApiKey };
-        using var response = await SendAsync(HttpMethod.Post, $"Plugins/{PluginGuid}/Configuration", AdminToken, settings);
-        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        using var response = await SendAsync(HttpMethod.Put, "Retimer/Settings", AdminToken, settings);
+        var text = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        Assert.True(response.IsSuccessStatusCode, $"PUT Retimer/Settings answered {(int)response.StatusCode}: {text}");
+        return JsonNode.Parse(text)!;
+    }
+
+    /// <summary>
+    /// Settings that point the plugin at this fixture's stand-ins, with good keys everywhere.
+    /// </summary>
+    public JsonObject StandInSettings(bool retimer = true) => new()
+    {
+        ["SubtitleLanguage"] = "ja",
+        ["JimakuEnabled"] = true,
+        ["JimakuApiKey"] = GoodJimakuKey,
+        ["OpenSubtitlesEnabled"] = false,
+        ["RetimerEnabled"] = retimer,
+        ["RetimerUrl"] = RetimerUrl,
+        ["RetimerApiKey"] = GoodRetimerKey,
+        ["SendAudio"] = "never",
+        ["OpenRouterApiKey"] = GoodOpenRouterKey,
+        ["FetchAccess"] = "managers",
+        ["MaxJobsPerDay"] = 0,
+        ["MaxCostPerDay"] = 0
+    };
+
+    /// <summary>
+    /// Waits until the plugin's queue is empty and returns the newest job of the item.
+    /// </summary>
+    public async Task<JsonNode> WaitForJobAsync(string itemId)
+    {
+        var watch = Stopwatch.StartNew();
+        while (watch.Elapsed < TimeSpan.FromSeconds(90))
+        {
+            var jobs = (await GetJsonAsync("Retimer/Jobs?since=0", AdminToken))!["Jobs"]!.AsArray();
+            var mine = jobs.Where(job => job!["ItemId"]!.GetValue<string>() == itemId).ToList();
+            if (mine.Count > 0 && mine.All(job => job!["State"]!.GetValue<string>() is not ("queued" or "working")))
+            {
+                return mine.OrderByDescending(job => job!["Created"]!.GetValue<string>(), StringComparer.Ordinal).First()!;
+            }
+
+            await Task.Delay(300, TestContext.Current.CancellationToken);
+        }
+
+        throw new TimeoutException("The plugin's job did not end within 90 s.\n" + TailOfServerOutput());
     }
 
     public string TailOfServerOutput()
@@ -297,18 +370,21 @@ public class JellyfinServer : IAsyncLifetime
                 body = _zip;
                 contentType = "application/zip";
             }
-            else if (path == "/retimer/v1/jobs")
+            else if (path.StartsWith("/retimer/v1/", StringComparison.Ordinal))
             {
-                // The stand-in retimer: retimer-api answers this call with the key's jobs, or 401.
-                var authorization = context.Request.Headers["Authorization"];
-                lock (RetimerKeysSeen)
-                {
-                    RetimerKeysSeen.Add(authorization);
-                }
-
-                var accepted = authorization == "Bearer " + GoodRetimerKey;
-                status = accepted ? 200 : 401;
-                body = Encoding.UTF8.GetBytes(accepted ? """{"jobs":[]}""" : """{"detail":"A valid API key is required: Authorization: Bearer <key>."}""");
+                (status, body, contentType) = await AnswerAsRetimerAsync(context.Request);
+            }
+            else if (path == "/openrouter/chat/completions")
+            {
+                (status, var json) = await AnswerAsOpenRouterAsync(context.Request);
+                body = Encoding.UTF8.GetBytes(json);
+            }
+            else if (path.StartsWith("/jimaku/files/", StringComparison.Ordinal))
+            {
+                // A subtitle file of the stand-in Jimaku: a few Japanese lines.
+                body = Encoding.UTF8.GetBytes(JapaneseSubtitle);
+                contentType = "application/x-subrip";
+                status = path.EndsWith(".srt", StringComparison.Ordinal) ? 200 : 404;
             }
             else if (path.StartsWith("/jimaku/api/", StringComparison.Ordinal))
             {
@@ -344,8 +420,8 @@ public class JellyfinServer : IAsyncLifetime
              "anilist_id":154587,"tmdb_id":"tv:209867","creator_id":7,"last_modified":"2024-03-22T15:04:05.123456Z",
              "flags":{"anime":true,"movie":false,"adult":false,"external":false,"unverified":false},"notes":null}
             """;
-        const string Episode3 = """{"name":"[Group] Sousou no Frieren - 03.ja.srt","url":"https://jimaku.cc/entry/4321/download/x-03.srt","size":34567,"last_modified":"2023-10-14T12:00:00Z"}""";
-        const string Batch = """{"name":"Frieren S01 (1-28).zip","url":"https://jimaku.cc/entry/4321/download/batch.zip","size":1048576,"last_modified":"2024-03-22T15:04:05Z"}""";
+        string Listed(int episode) => $$"""{"name":"[Group] Sousou no Frieren - 0{{episode}}.ja.srt","url":"{{new Uri(HelperAddress, $"jimaku/files/x-0{episode}.srt")}}","size":34567,"last_modified":"2023-10-14T12:00:00Z"}""";
+        var batch = $$"""{"name":"Frieren S01 (1-28).zip","url":"{{new Uri(HelperAddress, "jimaku/files/batch.zip")}}","size":1048576,"last_modified":"2024-03-22T15:04:05Z"}""";
 
         var authorization = request.Headers["Authorization"];
         lock (JimakuRequests)
@@ -378,13 +454,354 @@ public class JellyfinServer : IAsyncLifetime
         {
             return (200, query["episode"] switch
             {
-                null => "[" + Episode3 + "," + Batch + "]",
-                "3" => "[" + Episode3 + "]",
+                null => "[" + Listed(3) + "," + Listed(4) + "," + Listed(5) + "," + batch + "]",
+                "3" => "[" + Listed(3) + "]",
                 _ => "[]"
             }, null);
         }
 
         return (404, """{"error":"entry not found","code":404}""", null);
+    }
+
+    private const string JapaneseSubtitle = """
+        1
+        00:00:01,000 --> 00:00:04,000
+        おはようございます、フリーレン様。
+
+        2
+        00:00:06,000 --> 00:00:09,500
+        今日はいい天気ですね。
+
+        3
+        00:00:12,000 --> 00:00:15,000
+        魔法を集めるのが私の趣味なんだ。
+
+        4
+        00:00:20,000 --> 00:00:24,000
+        そろそろ出発しましょうか。
+
+        5
+        00:00:30,000 --> 00:00:33,000
+        ヒンメルならそうしたってことだよ。
+
+        6
+        00:00:40,000 --> 00:00:44,000
+        人間の寿命は短いってわかっていたのに。
+
+        """;
+
+    private const string EnglishTrack = """
+        1
+        00:00:08,500 --> 00:00:11,500
+        Good morning, Mistress Frieren.
+
+        2
+        00:00:13,500 --> 00:00:17,000
+        Lovely weather today.
+
+        3
+        00:00:19,500 --> 00:00:22,500
+        Collecting magic is my hobby.
+
+        4
+        00:00:27,500 --> 00:00:31,500
+        Shall we set out?
+
+        """;
+
+    private const string SignsTrack = """
+        1
+        00:00:02,000 --> 00:00:04,000
+        FRIEREN
+
+        """;
+
+    /// <summary>
+    /// The stand-in Retimer API: features, a job that is finished at once, its result and its removal,
+    /// in the shapes of retimer-api's README.
+    /// </summary>
+    private async Task<(int Status, byte[] Body, string ContentType)> AnswerAsRetimerAsync(HttpListenerRequest request)
+    {
+        static (int, byte[], string) Json(int status, string json) => (status, Encoding.UTF8.GetBytes(json), "application/json");
+
+        var authorization = request.Headers["Authorization"];
+        lock (RetimerKeysSeen)
+        {
+            RetimerKeysSeen.Add(authorization);
+        }
+
+        if (authorization != "Bearer " + GoodRetimerKey)
+        {
+            return Json(401, """{"detail":"A valid API key is required: Authorization: Bearer <key>."}""");
+        }
+
+        var path = request.Url!.AbsolutePath["/retimer/v1/".Length..];
+        if (path == "features")
+        {
+            return Json(200, """{"features":["matched_reference","ocr","reference_tracks","remove_signs_and_credits"],"limits":{"reference_subtitles":6}}""");
+        }
+
+        if (path == "jobs" && request.HttpMethod == "GET")
+        {
+            return Json(200, """{"jobs":[]}""");
+        }
+
+        if (path == "jobs" && request.HttpMethod == "POST")
+        {
+            using var buffer = new MemoryStream();
+            await request.InputStream.CopyToAsync(buffer, _stopping.Token);
+            var parts = ReadMultipart(request.ContentType ?? string.Empty, buffer.ToArray());
+            var target = parts.First(part => part.Name == "target");
+            var id = "e2e-job-" + Interlocked.Increment(ref _retimerJobs).ToString(CultureInfo.InvariantCulture);
+            var references = parts.Where(part => part.Name == "reference_subtitle").ToList();
+            lock (RetimerSubmissions)
+            {
+                RetimerSubmissions.Add(new RetimerSubmission(
+                    target.FileName,
+                    references.Select(part => Encoding.UTF8.GetString(part.Content)).ToList(),
+                    parts.Any(part => part.Name == "reference_audio"),
+                    JsonNode.Parse(Encoding.UTF8.GetString(parts.First(part => part.Name == "options").Content))!));
+                _retimerResults[id] = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(target.Content).Replace("00:00:01,000", RetimedStamp, StringComparison.Ordinal));
+            }
+
+            return Json(202, $$"""{"id":"{{id}}","status":"queued"}""");
+        }
+
+        if (path.StartsWith("jobs/", StringComparison.Ordinal))
+        {
+            var rest = path["jobs/".Length..];
+            if (request.HttpMethod == "DELETE")
+            {
+                return (204, [], "application/json");
+            }
+
+            if (rest.EndsWith("/result", StringComparison.Ordinal))
+            {
+                lock (RetimerSubmissions)
+                {
+                    return _retimerResults.TryGetValue(rest[..^"/result".Length], out var result)
+                        ? (200, result, "application/x-subrip")
+                        : Json(404, """{"detail":"No such job."}""");
+                }
+            }
+
+            // The first track is the dialogue track, the second holds one sign.
+            return Json(200, """
+                {"id":"JOB","status":"finished","stage":"done","outcome":"synced",
+                 "summary":{"cost_usd":0.002,"confidence":0.93,"warnings":[],"fit":"constant",
+                  "blocks":[{"from_ms":null,"to_ms":null,"shift_ms":7500,"lines":3,"confidence":0.93}],
+                  "reference":{"chosen":0,"reason":"The first track fits.","candidates":[
+                   {"index":0,"language":"eng","title":"Full","verdict":"chosen","reason":null},
+                   {"index":1,"language":"eng","title":"Signs","verdict":"too_little_dialogue","reason":null}]}}}
+                """.Replace("JOB", rest, StringComparison.Ordinal));
+        }
+
+        return Json(404, """{"detail":"Not found."}""");
+    }
+
+    /// <summary>
+    /// The stand-in OpenRouter. It answers the three questions the plugin asks a model with a forced tool call,
+    /// in the shape of OpenRouter's chat API.
+    /// </summary>
+    private async Task<(int Status, string Json)> AnswerAsOpenRouterAsync(HttpListenerRequest request)
+    {
+        using var reader = new StreamReader(request.InputStream, Encoding.UTF8);
+        var body = JsonNode.Parse(await reader.ReadToEndAsync(_stopping.Token))!;
+        if (request.Headers["Authorization"] != "Bearer " + GoodOpenRouterKey)
+        {
+            return (401, """{"error":{"code":401,"message":"No auth credentials found"}}""");
+        }
+
+        var offered = (body["tools"] as JsonArray ?? []).Select(tool => tool!["function"]!["name"]!.GetValue<string>()).ToList();
+        var name = body["tool_choice"] is JsonObject forced
+            ? forced["function"]!["name"]!.GetValue<string>()
+            : offered.Contains("choose_entry") ? "choose_entry" : offered.FirstOrDefault() ?? "none";
+        lock (ModelCalls)
+        {
+            ModelCalls.Add(name);
+        }
+
+        JsonObject arguments;
+        if (name == "choose_entry")
+        {
+            arguments = new JsonObject { ["entry_id"] = "4321", ["reason"] = "The title fits." };
+        }
+        else if (name == "language_verdict")
+        {
+            arguments = new JsonObject { ["language"] = "ja", ["second_language"] = null, ["reason"] = "Kana and kanji." };
+        }
+        else if (name == "map_files")
+        {
+            // Every listed file whose name holds " - NN" goes to episode NN.
+            var user = body["messages"]![1]!["content"]!.GetValue<string>();
+            var episodes = new JsonArray();
+            foreach (var line in user[user.IndexOf("Files:\n", StringComparison.Ordinal)..].Split('\n').Skip(1))
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(line, @"^(\d+) .* - (\d{2})\b");
+                if (match.Success)
+                {
+                    episodes.Add(new JsonObject
+                    {
+                        ["episode"] = int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture),
+                        ["files"] = new JsonArray(int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture)),
+                        ["reason"] = "The name carries the episode."
+                    });
+                }
+            }
+
+            arguments = new JsonObject { ["episodes"] = episodes };
+        }
+        else
+        {
+            arguments = new JsonObject { ["ok"] = true };
+        }
+
+        var answer = new JsonObject
+        {
+            ["id"] = "gen-e2e",
+            ["choices"] = new JsonArray(new JsonObject
+            {
+                ["message"] = new JsonObject
+                {
+                    ["role"] = "assistant",
+                    ["content"] = null,
+                    ["tool_calls"] = new JsonArray(new JsonObject
+                    {
+                        ["id"] = "call_1",
+                        ["type"] = "function",
+                        ["function"] = new JsonObject { ["name"] = name, ["arguments"] = arguments.ToJsonString() }
+                    })
+                }
+            }),
+            ["usage"] = new JsonObject { ["cost"] = 0.0004 }
+        };
+        return (200, answer.ToJsonString());
+    }
+
+    /// <summary>
+    /// Splits a multipart/form-data body into its parts. The bytes of each part are kept as they came.
+    /// </summary>
+    private static List<(string Name, string FileName, byte[] Content)> ReadMultipart(string contentType, byte[] body)
+    {
+        var boundary = contentType[(contentType.IndexOf("boundary=", StringComparison.Ordinal) + "boundary=".Length)..].Trim('"');
+        var text = Encoding.Latin1.GetString(body);
+        var parts = new List<(string, string, byte[])>();
+        foreach (var piece in text.Split("--" + boundary, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var split = piece.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            if (split < 0)
+            {
+                continue;
+            }
+
+            var headers = piece[..split];
+            var content = piece[(split + 4)..];
+            if (content.EndsWith("\r\n", StringComparison.Ordinal))
+            {
+                content = content[..^2];
+            }
+
+            static string Value(string headers, string key)
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(headers, key + "=\"?([^\";\r\n]*)\"?");
+                return match.Success ? match.Groups[1].Value : string.Empty;
+            }
+
+            parts.Add((Value(headers, " name"), Value(headers, "filename"), Encoding.Latin1.GetBytes(content)));
+        }
+
+        return parts;
+    }
+
+    /// <summary>
+    /// Makes three small episodes with ffmpeg and gives them to the server as a library that asks no
+    /// metadata service: episodes 3 and 4 hold two English subtitle tracks, episode 5 holds none.
+    /// </summary>
+    private async Task CreateLibraryAsync()
+    {
+        Directory.CreateDirectory(SeasonDirectory);
+        var full = Path.Combine(_root, "full.srt");
+        var signs = Path.Combine(_root, "signs.srt");
+        await File.WriteAllTextAsync(full, EnglishTrack, _stopping.Token);
+        await File.WriteAllTextAsync(signs, SignsTrack, _stopping.Token);
+        foreach (var episode in new[] { 3, 4, 5 })
+        {
+            var arguments = new List<string>
+            {
+                "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+                "-f", "lavfi", "-i", "color=c=black:s=160x90:r=2",
+                "-f", "lavfi", "-i", "anullsrc=r=8000:cl=mono"
+            };
+            if (episode != 5)
+            {
+                arguments.AddRange(["-i", full, "-i", signs]);
+            }
+
+            arguments.AddRange(["-t", "60", "-map", "0:v", "-map", "1:a"]);
+            if (episode != 5)
+            {
+                arguments.AddRange(
+                [
+                    "-map", "2:s", "-map", "3:s", "-c:s", "srt",
+                    "-metadata:s:s:0", "language=eng", "-metadata:s:s:0", "title=Full", "-disposition:s:0", "default",
+                    "-metadata:s:s:1", "language=eng", "-metadata:s:s:1", "title=Signs", "-disposition:s:1", "0"
+                ]);
+            }
+
+            arguments.AddRange(["-c:v", "mpeg4", "-c:a", "aac", "-metadata:s:a:0", "language=jpn"]);
+            arguments.Add(Path.Combine(SeasonDirectory, string.Create(CultureInfo.InvariantCulture, $"{ShowName} - S01E0{episode}.mkv")));
+
+            var ffmpeg = Environment.GetEnvironmentVariable("RETIMER_E2E_FFMPEG");
+            var start = new ProcessStartInfo(string.IsNullOrEmpty(ffmpeg) ? "ffmpeg" : ffmpeg) { RedirectStandardError = true, UseShellExecute = false };
+            foreach (var argument in arguments)
+            {
+                start.ArgumentList.Add(argument);
+            }
+
+            using var process = Process.Start(start)!;
+            var errors = await process.StandardError.ReadToEndAsync(_stopping.Token);
+            await process.WaitForExitAsync(_stopping.Token);
+            if (process.ExitCode != 0)
+            {
+                throw new InvalidOperationException("ffmpeg could not make a test video: " + errors);
+            }
+        }
+
+        static JsonObject NoFetchers(string type) => new() { ["Type"] = type, ["MetadataFetchers"] = new JsonArray(), ["ImageFetchers"] = new JsonArray() };
+        var options = new JsonObject
+        {
+            ["LibraryOptions"] = new JsonObject
+            {
+                ["PathInfos"] = new JsonArray(new JsonObject { ["Path"] = Path.Combine(MediaDirectory, "shows") }),
+                ["EnableRealtimeMonitor"] = false,
+                ["TypeOptions"] = new JsonArray(NoFetchers("Series"), NoFetchers("Season"), NoFetchers("Episode"))
+            }
+        };
+        using (var created = await SendAsync(HttpMethod.Post, "Library/VirtualFolders?name=Shows&collectionType=tvshows&refreshLibrary=true", AdminToken, options))
+        {
+            created.EnsureSuccessStatusCode();
+        }
+
+        // The scan runs in the background. It is done when all three episodes are there with their tracks read.
+        var watch = Stopwatch.StartNew();
+        while (watch.Elapsed < TimeSpan.FromSeconds(120))
+        {
+            var items = (await GetJsonAsync("Items?Recursive=true&IncludeItemTypes=Episode&Fields=MediaStreams", AdminToken))!["Items"]!.AsArray();
+            if (items.Count == 3 && items.All(item => item!["MediaStreams"] is JsonArray { Count: >= 2 } && item["IndexNumber"] is not null && item["SeriesId"] is not null))
+            {
+                foreach (var item in items)
+                {
+                    Episodes[item!["IndexNumber"]!.GetValue<int>()] = Guid.Parse(item["Id"]!.GetValue<string>()).ToString("N");
+                    ShowId = Guid.Parse(item["SeriesId"]!.GetValue<string>()).ToString("N");
+                }
+
+                return;
+            }
+
+            await Task.Delay(1000, _stopping.Token);
+        }
+
+        throw new TimeoutException("Jellyfin did not finish scanning the test library within 120 s.");
     }
 
     private void StartServer()
@@ -416,7 +833,10 @@ public class JellyfinServer : IAsyncLifetime
             start.ArgumentList.Add(argument);
         }
 
-        // The plugin reads this once, when the server starts.
+        // The plugin reads these once, when the server starts.
+        start.Environment["RETIMER_OPENROUTER_API_URL"] = OpenRouterUrl;
+        start.Environment.Remove("OPENROUTER_API_KEY");
+        start.Environment.Remove("ANTHROPIC_RETIMER_API_KEY");
         if (UseStandInJimaku)
         {
             start.Environment["RETIMER_JIMAKU_API_URL"] = new Uri(HelperAddress, "jimaku/api").AbsoluteUri;
@@ -614,3 +1034,8 @@ public class JellyfinServer : IAsyncLifetime
         }
     }
 }
+
+/// <summary>
+/// What one job brought to the stand-in Retimer API.
+/// </summary>
+public sealed record RetimerSubmission(string TargetName, List<string> References, bool HasAudio, JsonNode Options);

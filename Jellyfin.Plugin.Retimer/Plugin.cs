@@ -9,7 +9,8 @@ using MediaBrowser.Model.Serialization;
 namespace Jellyfin.Plugin.Retimer;
 
 /// <summary>
-/// The Subtitle Retimer plugin: finds subtitles on Jimaku and, later, retimes them to the audio.
+/// The Subtitle Retimer plugin: finds subtitles for the shows and films of the library, retimes them with Retimer API
+/// when that is switched on, and saves them through Jellyfin.
 /// </summary>
 public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
 {
@@ -32,6 +33,16 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// The embedded resource that holds the page for all signed-in users.
     /// </summary>
     public const string UserPageResource = "Jellyfin.Plugin.Retimer.Web.index.html";
+
+    /// <summary>
+    /// The embedded resource that holds the page's script.
+    /// </summary>
+    public const string UserScriptResource = "Jellyfin.Plugin.Retimer.Web.app.js";
+
+    /// <summary>
+    /// The embedded resource that holds the page's styles.
+    /// </summary>
+    public const string UserStylesResource = "Jellyfin.Plugin.Retimer.Web.app.css";
 
     /// <summary>
     /// The plugin's fixed id.
@@ -61,7 +72,7 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public override Guid Id => PluginId;
 
     /// <inheritdoc />
-    public override string Description => "Finds Japanese subtitles on Jimaku and retimes them to the audio.";
+    public override string Description => "Finds subtitles for your shows and films, retimes them with Retimer API, and saves them where Jellyfin lists them.";
 
     /// <summary>
     /// Gets the pages Jellyfin's dashboard serves for this plugin. Only administrators can open them.

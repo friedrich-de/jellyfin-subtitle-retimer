@@ -34,14 +34,14 @@ cat > dist/manifest.json <<JSON
   {
     "guid": "${guid}",
     "name": "Subtitle Retimer",
-    "overview": "Finds Japanese subtitles on Jimaku and retimes them to the audio.",
-    "description": "Searches Jimaku with your own API key and, in later versions, retimes the subtitles it finds to the audio of your files.",
+    "overview": "Finds subtitles for your shows and films and fixes their timing.",
+    "description": "A page that lists your shows and gets a subtitle for an episode from Jimaku or OpenSubtitles. A model can pick the file, and Retimer API can retime it against the video's own subtitle tracks or its audio. The subtitle is saved next to the video and Jellyfin lists it at once.",
     "owner": "friedrich-de",
     "category": "Subtitles",
     "versions": [
       {
         "version": "${version}",
-        "changelog": "First skeleton: settings page, Jimaku search, a page for all signed-in users.",
+        "changelog": "The subtitle page: your shows, episodes, a file picker, activity and settings. Fetches, retimes and saves subtitles.",
         "targetAbi": "${jellyfin_version}.0",
         "sourceUrl": "${base_url}/${zip_name}",
         "checksum": "${checksum}",

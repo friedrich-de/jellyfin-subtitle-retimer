@@ -1,59 +1,105 @@
 # Subtitle Retimer for Jellyfin
 
-A Jellyfin plugin that finds Japanese subtitles on [Jimaku](https://jimaku.cc) and, in later
-versions, retimes them to the audio of your files through a retimer service.
+A Jellyfin plugin that gets subtitles for your shows and films and fixes their timing.
 
-This is the skeleton. It builds for **Jellyfin 12.4** (.NET 10), installs through Jellyfin's own
-plugin installer, and has a settings page, a Jimaku search and a page for all signed-in users.
-It does not download, save or retime subtitles yet.
+It adds one page to your Jellyfin server. The page lists your shows with their posters. A click on
+a show lists its episodes, and from an episode you get a subtitle: the plugin searches the subtitle
+sources, picks a file, checks its language, retimes it against the video and saves it next to the
+video. Jellyfin lists the new subtitle at once, without a library scan.
 
-## What is in it
+It builds for **Jellyfin 12.4** (.NET 10) and installs through Jellyfin's own plugin installer.
+
+## What it does
 
 | Part | What it does |
 | --- | --- |
-| Settings page | Dashboard → Plugins → Subtitle Retimer. Holds the Jimaku API key and the retimer's address and key, and can check both connections. Administrators only. |
-| Jimaku search | Finds entries by AniList id, by TMDB id or by title, in that order, and lists an entry's files, optionally for one episode. Uses the key from the settings. |
-| Page for all users | `http://<your Jellyfin>/Retimer`. Any signed-in user can search Jimaku there. |
-| Retimer check | Confirms that the configured retimer answers and accepts the key. It submits no job. |
+| Your shows | `http://<your Jellyfin>/Retimer`. The libraries, shows and films your Jellyfin user may see, each with how many videos have a subtitle. |
+| A show | Its episodes with their state: no subtitle, a subtitle saved by the plugin (retimed or not), a subtitle that was already there. "Get subtitle" on one episode, "Get all missing" for the show. |
+| Choose a file | Every file the sources list for the show, the ones for this episode first. For when the plugin's own choice is wrong, or to search a source under another title. |
+| Activity | The jobs, one after the other, with their steps, their result and what they cost. |
+| Settings | Sources and their keys, Retimer API, the AI model, which libraries appear, who may fetch, and limits for a day. Administrators only. |
 
-The retimer can be the hosted service or your own
-[retimer-api](https://github.com/friedrich-de/retimer-api) server. Both take the same calls, so the
-plugin has one address and one key for either.
+### How a subtitle is fetched
+
+1. **Search.** Every source that is switched on is asked for the show: by AniList, TMDB or IMDb id
+   where the source takes one, else by title. Sources: [Jimaku](https://jimaku.cc) (Japanese, for
+   anime and dramas) and [OpenSubtitles](https://www.opensubtitles.com) (many languages).
+2. **Pick.** A model, called through [OpenRouter](https://openrouter.ai) with your key, chooses the
+   source's entry for the show and matches the listed files to the season's episodes. It only ever
+   chooses among files the sources list. Without a model, or when it gives no answer, the plugin
+   picks by ids and by the episode number in the file name, or stops and asks, as you set it.
+3. **Check the language.** A sample of the downloaded file is checked by its script, and by the
+   model for languages that share a script. A file in another language is skipped and the next one
+   is tried, three files at most.
+4. **Retime**, if Retimer API is switched on. The plugin cuts the text subtitle tracks out of the
+   video with Jellyfin's ffmpeg, six at most, and sends them with the downloaded subtitle. Retimer
+   API chooses the track that fits and moves the subtitle's lines to it. The video's audio is sent
+   never, only when no track fits, or always, as you set it. Picture subtitles (PGS), in the video
+   or from a source, can be read into text by Retimer API first.
+5. **Save.** The subtitle goes through Jellyfin's own subtitle upload, as `<video>.<language>.srt`
+   or `.ass` next to the video, and the plugin refreshes that one item.
+
+Retimer API is a separate service: the hosted one, or your own
+[retimer-api](https://github.com/friedrich-de/retimer-api) server. Both take the same calls. It is
+**off until you switch it on**; without it a subtitle is saved as downloaded.
+
+The subtitle language is one setting for the server, and each show can use another one, set on the
+show's page.
+
+### What leaves your server
+
+| To | What | When |
+| --- | --- | --- |
+| The subtitle sources | The show's ids and title, and the downloads | On every search |
+| OpenRouter | The show's title, year and season, the episodes with the names of their video files (no folders), the sources' entry and file names, and up to 45 lines of a downloaded subtitle | When a model is set |
+| Retimer API | The downloaded subtitle, the video's subtitle tracks with their language and title, and the audio if you allow it | When Retimer API is on |
+
+No video leaves the server. Only the audio does, and only if you allow it.
+
+### Cost and limits
+
+Each job records what OpenRouter and Retimer API report as its cost, and the page shows it. Two
+limits for a day, both in the settings, stop new jobs once they are reached: the number of
+subtitles (200 by default) and the cost (2 US dollars by default). The day ends at midnight UTC.
+"Get all missing" asks first and says what it will do.
 
 ## How the pages work
 
-Jellyfin's web client shows a plugin's own pages only to administrators. In 12.4 the route for
-plugin pages sits in the administrator part of the client, and the server refuses to list them to
-anyone else. So the plugin has two kinds of page:
+Jellyfin's web client shows a plugin's own pages only to administrators. So the plugin serves its
+page itself at `/Retimer`. The page has no login of its own: it reuses the login that Jellyfin's
+web client keeps in the browser for the same address, and calls the plugin's endpoints with it.
+Without a login it shows a link to Jellyfin. The page is served with a Content-Security-Policy that
+allows only its own script, styles and images, and nothing is written into it on the server.
 
-- **The settings page** is a normal Jellyfin plugin page, with an entry in the dashboard menu.
-- **The page for all users** is served by the plugin itself at `/Retimer`. It has no login of its
-  own. It reuses the login that Jellyfin's web client keeps in the browser for the same address,
-  and calls the plugin's endpoints with it. Without a login it shows a link to Jellyfin.
-
-Jellyfin's web client has no place where a plugin could add a link for normal users. To put one in
-the side menu, an administrator can add the page to `menuLinks` in the web client's `config.json`.
+The plugin's entry in the dashboard (Dashboard → Plugins → Subtitle Retimer) links to the page
+and to its settings. To put the page in the side menu for everyone, an administrator can add it to
+`menuLinks` in the web client's `config.json`.
 
 ## Who can do what
 
-| Endpoint | Without login | Signed-in user | Administrator |
-| --- | --- | --- | --- |
-| `GET /Retimer` (the page, no data in it) | yes | yes | yes |
-| `GET /Retimer/Status` (what is set up, never a key) | no | yes | yes |
-| `GET /Retimer/Jimaku/Entries?anilistId=&tmdbId=&query=&anime=` | no | yes | yes |
-| `GET /Retimer/Jimaku/Entries/{id}/Files?episode=` | no | yes | yes |
-| `POST /Retimer/Test/Jimaku`, `POST /Retimer/Test/Retimer` | no | no | yes |
-| Jellyfin's own `GET/POST /Plugins/{id}/Configuration` (the keys) | no | no | yes |
+| | Without login | Signed-in user | May manage subtitles | Administrator |
+| --- | --- | --- | --- | --- |
+| The page and its files (no data in them) | yes | yes | yes | yes |
+| See shows, episodes, states and jobs of what Jellyfin lets them see | no | yes | yes | yes |
+| Get, choose, retime or remove a subtitle, set a show's language | no | no | yes | yes |
+| See today's use and what a job cost | no | no | yes | yes |
+| Settings, connection checks, clearing the activity list | no | no | no | yes |
 
-A TMDB id is written the way Jimaku writes it: `tv:123` or `movie:123`. Jimaku keeps anime and
-live action apart: a search finds anime entries unless it says `anime=false`, and that holds for
-a lookup by id too.
+"May manage subtitles" is the right of that name in a Jellyfin user's profile. The setting "Who may
+fetch" can open fetching to every signed-in user. A job can be cancelled by whoever started it and
+by administrators. Only a subtitle the plugin saved itself can be removed through it.
 
 The keys are stored by Jellyfin in `plugins/configurations/Jellyfin.Plugin.Retimer.xml` on the
-server, readable by whoever administers the machine. No endpoint of the plugin returns them.
+server, readable by whoever administers the machine. The plugin's endpoints never return a key: the
+settings say only whether one is stored. Jellyfin's own `GET /Plugins/{id}/Configuration` returns
+them to administrators, as for every plugin.
 
-Jimaku limits requests per address. The plugin waits out a limit of up to five seconds once and
-otherwise passes it on with the time to wait.
+## Not in this version
+
+- A watch mode that fetches subtitles for new episodes by itself.
+- More sources. SubDL was looked at and left out, because its API could not be verified.
+- OpenSubtitles is built from its published API description and from open-source clients. It has
+  unit tests, and has not run against the live service yet.
 
 ## Build and test
 
@@ -68,18 +114,25 @@ dev/e2e.sh                     # end-to-end tests in a real Jellyfin 12.4 server
 
 `dev/e2e.sh` downloads the Jellyfin 12.4 server once into `.cache/` (about 110 MB, x86-64 Linux),
 packs the plugin, starts a throwaway server on a free local port, installs the plugin from a
-plugin repository through Jellyfin's installer, restarts the server and then calls every endpoint
-as nobody, as a normal user and as an administrator. To use a Jellyfin that is already installed:
+plugin repository through Jellyfin's installer and restarts the server. It makes three small
+episodes with ffmpeg, two of them with two English subtitle tracks, and gives them to the server as
+a library. Then it calls the endpoints as nobody, as a normal user and as an administrator, and
+fetches, retimes, saves and removes a subtitle. To use a Jellyfin that is already installed:
 
 ```sh
 RETIMER_E2E_JELLYFIN=/usr/bin/jellyfin RETIMER_E2E_JELLYFIN_WEB=/usr/share/jellyfin/web \
   RETIMER_E2E_FFMPEG=/usr/lib/jellyfin-ffmpeg/ffmpeg dev/e2e.sh
 ```
 
-The throwaway server does not call jimaku.cc. The tests start a stand-in on the same local port
-that answers in the shapes of Jimaku's published API description, and point the plugin at it with
-the environment variable `RETIMER_JIMAKU_API_URL`. That variable exists for tests only: the plugin
-reads it once at start and logs a warning when it is set. Leave it unset on a real server.
+The throwaway server calls no outside service. The tests play Jimaku, OpenRouter and Retimer API
+themselves on a local port, in the shapes of those services' published API descriptions, and point
+the plugin at them with the environment variables `RETIMER_JIMAKU_API_URL` and
+`RETIMER_OPENROUTER_API_URL` and with the address of Retimer API in the settings.
+`RETIMER_OPENSUBTITLES_API_URL` does the same for OpenSubtitles. These variables exist for tests
+only: the plugin reads them once at start. Leave them unset on a real server.
+
+The page itself was checked by hand in Chromium against the same kind of server; no test opens a
+browser.
 
 One more end-to-end test searches the real jimaku.cc. It runs only when `JIMAKU_API_KEY` is set.
 The script builds everything before the tests and keeps the key away from the build, because the
@@ -103,7 +156,7 @@ built against. A plugin built for 12.4 does not load on Jellyfin 10.11, which ru
 
 | Path | Content |
 | --- | --- |
-| `Jellyfin.Plugin.Retimer/` | The plugin: `Plugin.cs`, `Configuration/` (settings and their page), `Jimaku/` (client), `Retimer/` (connection check), `Api/` (endpoints), `Web/` (page for all users) |
+| `Jellyfin.Plugin.Retimer/` | The plugin: `Configuration/` (settings), `Sources/` and `Jimaku/` (subtitle sources), `Picking/` (model, rules, language check), `Retimer/` (Retimer API client), `Library/` (what the plugin reads from and writes to Jellyfin), `Jobs/` (the job, the queue, what is remembered), `Api/` (endpoints), `Web/` (the page) |
 | `Jellyfin.Plugin.Retimer.Tests/` | Unit tests. Nothing in them leaves the process. |
 | `Jellyfin.Plugin.Retimer.E2E/` | End-to-end tests against a real server |
 | `dev/` | `package.sh`, `e2e.sh` |

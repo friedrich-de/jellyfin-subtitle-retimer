@@ -38,6 +38,9 @@ public sealed class FakeJimaku : IJimakuClient
             ? Task.FromResult<IReadOnlyList<JimakuFile>>([new JimakuFile { Name = "03.srt", Url = "https://jimaku.cc/x", Size = 1 }])
             : Task.FromException<IReadOnlyList<JimakuFile>>(Failure);
     }
+
+    public Task<byte[]> DownloadAsync(string url, long maxBytes, CancellationToken cancellationToken) =>
+        Failure is null ? Task.FromResult(System.Text.Encoding.UTF8.GetBytes("1\n00:00:01,000 --> 00:00:02,000\nこんにちは\n")) : Task.FromException<byte[]>(Failure);
 }
 
 public sealed class FakeRetimer : IRetimerClient

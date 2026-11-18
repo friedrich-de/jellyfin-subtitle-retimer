@@ -38,4 +38,14 @@ public interface IJimakuClient
     /// <returns>The files, possibly none.</returns>
     /// <exception cref="JimakuException">The call failed.</exception>
     Task<IReadOnlyList<JimakuFile>> GetFilesAsync(long entryId, int? episode, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Fetches a file from the address Jimaku listed for it. Only addresses at Jimaku itself are fetched.
+    /// </summary>
+    /// <param name="url">The file's address, as <see cref="JimakuFile.Url"/> gave it.</param>
+    /// <param name="maxBytes">The largest file to accept.</param>
+    /// <param name="cancellationToken">Cancels the call.</param>
+    /// <returns>The file's bytes.</returns>
+    /// <exception cref="JimakuException">The call failed, or the file is too large.</exception>
+    Task<byte[]> DownloadAsync(string url, long maxBytes, CancellationToken cancellationToken);
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -32,7 +33,21 @@ internal sealed record RetimerFeatures
 /// <summary>
 /// A subtitle track of the video, sent as something the subtitle can be compared with.
 /// </summary>
-internal sealed record ReferenceUpload(string FileName, byte[] Content, string? Language, string? Title, bool IsDefault, bool IsForced);
+/// <param name="FileName">A file name with the track's format.</param>
+/// <param name="Content">The track as a subtitle file.</param>
+/// <param name="Language">The language the video names for the track.</param>
+/// <param name="Title">The track's title.</param>
+/// <param name="IsDefault">Whether the video marks the track as its default.</param>
+/// <param name="IsForced">Whether the video marks the track as forced, which holds signs only.</param>
+/// <param name="IsHearingImpaired">Whether the video marks the track as captions for the hearing impaired.</param>
+internal sealed partial record ReferenceUpload(string FileName, byte[] Content, string? Language, string? Title, bool IsDefault, bool IsForced, bool IsHearingImpaired = false)
+{
+    /// <summary>Gets a value indicating whether the track holds captions for the hearing impaired, by the video's mark or by its title.</summary>
+    public bool ForHearingImpaired => IsHearingImpaired || (Title is not null && CaptionsTitle().IsMatch(Title));
+
+    [GeneratedRegex(@"(^|[^a-z])(cc|sdh)([^a-z]|$)|closed caption|hearing", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex CaptionsTitle();
+}
 
 /// <summary>
 /// One job for Retimer API.

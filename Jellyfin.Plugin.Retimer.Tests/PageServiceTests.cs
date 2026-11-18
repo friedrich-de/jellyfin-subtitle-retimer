@@ -229,7 +229,7 @@ public sealed class PageServiceTests : IDisposable
         await _w.Queue.Idle.WaitAsync(TimeSpan.FromSeconds(20), Token);
 
         Assert.Equal(1, view!.Started);
-        Assert.Contains("limit of 1 subtitles", view.Refused, StringComparison.Ordinal);
+        Assert.Contains("limit of 1 job ", view.Refused, StringComparison.Ordinal);
     }
 
     [Fact]

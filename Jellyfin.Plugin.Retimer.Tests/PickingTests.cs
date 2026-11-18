@@ -53,6 +53,8 @@ public class PickingTests
     [InlineData("[Kamigami] Fate Zero - 05 [BD 1920x1080 x264 AAC].Jap&furigana.ass", null, 5)]
     [InlineData("[Tenrai-Sensei] Fate Zero E05 [BD][1080p][HEVC 10bit x265].srt", null, 5)]
     [InlineData("[UTW] Fate Zero - 11 [BD][h264-720p AC3][5D482629].ass", null, 11)]
+    [InlineData("[UTW] Fate Zero - 19 [BD][h264-720p AC3][84ECD0E2].ass", null, 19)]
+    [InlineData("[Group] Show E7 [1080p][0A1B2CE3].srt", null, 7)]
     [InlineData("Fate Zero -14- 720p BD Dual Audio HEVC [Patwari][AnimeKayo].ja.ass", null, 14)]
     [InlineData("Show.S02E01.1080p.WEB.ja.srt", 2, 1)]
     [InlineData("Show 2x07.srt", 2, 7)]
@@ -122,6 +124,18 @@ public class PickingTests
     {
         Assert.Equal(expected, RulesPicker.IsHearingImpaired(new SourceFile { Source = "jimaku", Id = "1", Name = name }));
         Assert.True(RulesPicker.IsHearingImpaired(new SourceFile { Source = "opensubtitles", Id = "1", Name = "plain.srt", HearingImpaired = true }));
+    }
+
+    [Fact]
+    public void The_files_of_one_release_share_a_name_once_the_numbers_are_left_out()
+    {
+        var one = RulesPicker.NamePattern("[Kamigami] Fate Zero - 14 [BD 1920x1080 x264 AAC].Jap&furigana.ass");
+        var next = RulesPicker.NamePattern("[Kamigami] Fate Zero - 15 [BD 1920x1080 x264 AAC].Jap&furigana.ass");
+        var other = RulesPicker.NamePattern("[UTW] Fate Zero - 14 [BD][h264-720p AC3][D0E76642].ass");
+
+        Assert.Equal(one, next);
+        Assert.NotEqual(one, other);
+        Assert.Equal("[kamigami] fate zero - # [bd #x# x# aac].jap&furigana.ass", one);
     }
 
     [Fact]

@@ -105,8 +105,45 @@ public sealed class JobQueueTests : IDisposable
         await _w.Queue.Idle.WaitAsync(TimeSpan.FromSeconds(20), Token);
 
         Assert.Null(job);
-        Assert.Contains("limit of 2 subtitles", refused, StringComparison.Ordinal);
+        Assert.Contains("limit of 2 jobs", refused, StringComparison.Ordinal);
         Assert.Equal(2, _w.Library.Saved.Count);
+        Assert.Equal(2, _w.Queue.Usage().Jobs);
+        Assert.Contains("limit of 2 jobs is reached", _w.Queue.Refusal(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_job_counts_toward_the_day_when_it_starts_and_not_while_it_waits()
+    {
+        var videos = _w.FateZero(3);
+        _w.Settings.Current.MaxJobsPerDay = 3;
+        var started = new TaskCompletionSource();
+        var release = new TaskCompletionSource();
+        var map = _w.Model.Tools["map_files"];
+        _w.Model.Tools["map_files"] = messages =>
+        {
+            started.TrySetResult();
+            release.Task.Wait(Token);
+            return map(messages);
+        };
+
+        _w.Queue.Enqueue(_w.JobFor(videos[0]));
+        var second = _w.Queue.Enqueue(_w.JobFor(videos[1])).Job!;
+        var third = _w.Queue.Enqueue(_w.JobFor(videos[2])).Job!;
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(20), Token);
+
+        // One runs and two wait: the day's use is one job, and the line still has no room for a fourth.
+        Assert.Equal(1, _w.Queue.Usage().Jobs);
+        Assert.Contains("is taken: 1 started and 2 waiting", _w.Queue.Refusal(), StringComparison.Ordinal);
+
+        // A job that is cancelled while it waits gives its place back and is never counted.
+        Assert.True(_w.Queue.Cancel(third.Id));
+        Assert.Null(_w.Queue.Refusal());
+        release.SetResult();
+        await _w.Queue.Idle.WaitAsync(TimeSpan.FromSeconds(20), Token);
+
+        Assert.Equal(2, _w.Queue.Usage().Jobs);
+        Assert.Equal(JobState.SavedRaw, _w.Queue.Find(second.Id)!.State);
+        Assert.Equal(JobState.Cancelled, _w.Queue.Find(third.Id)!.State);
     }
 
     [Fact]

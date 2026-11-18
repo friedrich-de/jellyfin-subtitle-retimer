@@ -38,13 +38,34 @@ internal sealed class ShowRecord
     /// <summary>Gets or sets the model's episode-to-file lists, by "source|entry|season|language".</summary>
     public Dictionary<string, FileMapping> Mappings { get; set; } = [];
 
-    /// <summary>A copy that is safe to read while the stored record changes. The matches and mappings themselves are never changed in place.</summary>
+    /// <summary>
+    /// Gets or sets the kinds of file that were rejected for an episode of this show for a reason that holds
+    /// for the other episodes too, such as a second language. Oldest first.
+    /// </summary>
+    public List<RejectedKind> Rejected { get; set; } = [];
+
+    /// <summary>A copy that is safe to read while the stored record changes. The matches, mappings and rejections themselves are never changed in place.</summary>
     public ShowRecord Snapshot() => new()
     {
         Language = Language,
         Matches = new Dictionary<string, EntryMatch>(Matches, StringComparer.Ordinal),
-        Mappings = new Dictionary<string, FileMapping>(Mappings, StringComparer.Ordinal)
+        Mappings = new Dictionary<string, FileMapping>(Mappings, StringComparer.Ordinal),
+        Rejected = [.. Rejected]
     };
+}
+
+internal sealed class RejectedKind
+{
+    public string Source { get; set; } = string.Empty;
+
+    public string Language { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the file's name with every number left out, which the files of one release share.</summary>
+    public string Pattern { get; set; } = string.Empty;
+
+    public string Reason { get; set; } = string.Empty;
+
+    public DateTimeOffset At { get; set; }
 }
 
 internal sealed class EntryMatch

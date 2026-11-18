@@ -182,7 +182,12 @@ label.check > span > span { display: block; }
 .badge.busy { left: 6px; right: auto; background: var(--primary); color: var(--on-primary); }
 .meter { position: absolute; left: 0; right: 0; bottom: 0; height: .28em; background: rgba(0, 0, 0, .5); }
 .meter > i { display: block; height: 100%; background: var(--primary); }
-.card .title { margin-top: 8px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Two lines, so titles that begin alike can be told apart. The space at the sides is for the
+   dots of a title that is cut: on a centred line they would stand outside the card. */
+.card .title {
+    margin-top: 8px; padding: 0 6px; font-weight: 600; overflow: hidden; overflow-wrap: anywhere;
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+}
 .card .line { font-size: 86%; color: var(--soft); }
 
 /* One show */
@@ -207,11 +212,18 @@ label.check > span > span { display: block; }
 }
 .thumb { position: relative; flex: 0 0 auto; width: 150px; aspect-ratio: 16 / 9; overflow: hidden; border-radius: .2em; background: #1b2440; }
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
-.thumb .num { position: absolute; left: 8px; bottom: 4px; font-size: 1.6em; font-weight: 700; color: rgba(255, 255, 255, .45); }
+/* The number stands on a dark fade, so it can be read on a bright picture too. */
+.thumb .num {
+    position: absolute; left: 0; right: 0; bottom: 0; padding: 16px 8px 3px;
+    font-size: 1.5em; font-weight: 700; color: rgba(255, 255, 255, .92);
+    background: linear-gradient(to top, rgba(0, 0, 0, .72), rgba(0, 0, 0, 0));
+    text-shadow: 0 1px 3px rgba(0, 0, 0, .9);
+}
 .episode .what { flex: 1 1 220px; min-width: 0; }
 .episode .name { font-size: 1.1em; font-weight: 600; }
 .state { flex: 1 1 260px; min-width: 0; }
 .state .text { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.fileName { overflow-wrap: anywhere; }
 .dot { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 50%; background: var(--soft); }
 .dot.retimed, .dot.present { background: var(--ok); }
 .dot.raw { background: var(--warn); }
@@ -249,15 +261,17 @@ label.check > span > span { display: block; }
 .file.chosen { border-color: var(--primary); }
 .file.off { opacity: .6; cursor: default; }
 .file .name { font-weight: 600; overflow-wrap: anywhere; }
-.tag { display: inline-block; padding: 1px 8px; margin-right: 6px; border-radius: 100em; background: var(--fill); font-size: 82%; font-weight: 600; }
+/* A tag of one line is a pill. One that runs over two lines keeps its corners. */
+.tag { display: inline-block; padding: 1px 8px; margin-right: 6px; border-radius: .9em; background: var(--fill); font-size: 82%; font-weight: 600; }
 .tag.suggested { background: rgba(0, 164, 220, .22); color: #7fd6f3; }
 .tag.tried { background: rgba(209, 83, 83, .22); color: #f0a3a3; }
 .tag.current { background: rgba(82, 181, 75, .22); color: #9bdc96; }
 .stickyFoot {
     position: sticky; bottom: 0;
     display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end;
-    margin-top: 18px; padding: 14px 0;
-    background: linear-gradient(to top, var(--bg) 70%, rgba(16, 16, 16, 0));
+    margin-top: 18px; padding: 14px 0; z-index: 4;
+    /* Only the strip above the buttons fades, however many rows they take on a narrow screen. */
+    background: linear-gradient(to top, var(--bg) calc(100% - 14px), rgba(16, 16, 16, 0));
 }
 
 /* Activity */
@@ -282,7 +296,7 @@ label.check > span > span { display: block; }
     position: sticky; bottom: 0; z-index: 4;
     display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
     padding: 14px 0;
-    background: linear-gradient(to top, var(--bg) 70%, rgba(16, 16, 16, 0));
+    background: linear-gradient(to top, var(--bg) calc(100% - 14px), rgba(16, 16, 16, 0));
 }
 
 .dialog {
@@ -300,6 +314,13 @@ label.check > span > span { display: block; }
     .barLinks a { padding: 0 10px; }
     .episode { flex-wrap: wrap; }
     .thumb { width: 110px; }
+    .episode .what { flex: 1 1 0; }
+    .state { flex: 1 1 100%; }
     .actions { margin-left: auto; }
     .backdrop { height: 150px; }
+
+    /* Activity: the buttons go under the text, which then has the row's width. */
+    .job { flex-wrap: wrap; }
+    .job .body { flex: 1 1 0; }
+    .job > .row { flex: 1 1 100%; padding-left: 72px; }
 }

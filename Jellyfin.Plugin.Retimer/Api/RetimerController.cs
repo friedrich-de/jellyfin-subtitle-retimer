@@ -297,8 +297,15 @@ public class RetimerController : ControllerBase
             return NoUser();
         }
 
-        var (view, error) = await _services.Page.FilesAsync(caller, itemId, cancellationToken).ConfigureAwait(false);
-        return error is null ? Ok(view) : Refuse(error);
+        try
+        {
+            var (view, error) = await _services.Page.FilesAsync(caller, itemId, cancellationToken).ConfigureAwait(false);
+            return error is null ? Ok(view) : Refuse(error);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return ClientLeft();
+        }
     }
 
     /// <summary>
@@ -322,8 +329,15 @@ public class RetimerController : ControllerBase
             return NoUser();
         }
 
-        var (entries, error) = await _services.Page.EntriesAsync(caller, itemId, query, cancellationToken).ConfigureAwait(false);
-        return error is null ? Ok(entries) : Refuse(error);
+        try
+        {
+            var (entries, error) = await _services.Page.EntriesAsync(caller, itemId, query, cancellationToken).ConfigureAwait(false);
+            return error is null ? Ok(entries) : Refuse(error);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return ClientLeft();
+        }
     }
 
     /// <summary>
@@ -376,6 +390,11 @@ public class RetimerController : ControllerBase
     private ObjectResult NoUser() => Problem("Sign in to Jellyfin as a user to use this page.", statusCode: StatusCodes.Status403Forbidden);
 
     private ObjectResult Refuse(ServiceError error) => Problem(error.Message, statusCode: error.Status);
+
+    /// <summary>
+    /// The answer to a request whose browser left before it was done. Nobody reads it, and it is no error of the server.
+    /// </summary>
+    private StatusCodeResult ClientLeft() => StatusCode(499);
 
     private ActionResult Resource(string name, string contentType)
     {

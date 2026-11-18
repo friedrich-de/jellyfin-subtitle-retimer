@@ -96,10 +96,15 @@
         return base + '/Items/' + id + '/Images/' + (kind || 'Primary') + '?fillWidth=' + width + '&quality=90' + (tag ? '&tag=' + encodeURIComponent(tag) : '');
     }
 
+    // A picture the server does not have, such as the poster of a show that was removed, is asked for once.
+    var noPicture = {};
+
     function picture(id, tag, width, kind) {
         if (!tag) { return null; }
-        var img = h('img', { src: image(id, tag, width, kind), alt: '', loading: 'lazy' });
-        img.addEventListener('error', function () { img.remove(); });
+        var src = image(id, tag, width, kind);
+        if (noPicture[src]) { return null; }
+        var img = h('img', { src: src, alt: '', loading: 'lazy' });
+        img.addEventListener('error', function () { noPicture[src] = true; img.remove(); });
         return img;
     }
 
@@ -108,7 +113,13 @@
     }
 
     function money(value) {
+        if (value > 0 && value < 0.001) { return 'less than $0.001'; }
         return '$' + (value < 0.1 && value > 0 ? value.toFixed(3) : value.toFixed(2));
+    }
+
+    // Keeps a number and its unit on one line, so a sentence never breaks before "s.".
+    function tidy(text) {
+        return text ? text.replace(/(\d) (s|ms|min)\b/g, '$1\u00a0$2') : text;
     }
 
     function ago(iso) {
@@ -131,7 +142,7 @@
 
     function usageText(usage) {
         if (!usage) { return ''; }
-        var text = 'Today: ' + plural(usage.Jobs, 'subtitle', 'subtitles') + (usage.MaxJobs > 0 ? ' of ' + usage.MaxJobs : '');
+        var text = 'Today: ' + (usage.MaxJobs > 0 ? usage.Jobs + ' of ' + plural(usage.MaxJobs, 'job', 'jobs') : plural(usage.Jobs, 'job', 'jobs'));
         text += ', ' + money(usage.CostUsd) + (usage.MaxCostUsd > 0 ? ' of ' + money(usage.MaxCostUsd) : '') + ' spent.';
         return text;
     }
@@ -206,6 +217,22 @@
             pollJobs();
             return answer;
         });
+    }
+
+    // The jobs the user asked to cancel. A running job takes a few seconds to stop, and the button says so meanwhile.
+    var cancelling = {};
+
+    function cancelButton(job, redraw) {
+        var asked = !!cancelling[job.Id];
+        return h('button', { class: 'button', text: asked ? 'Cancelling…' : 'Cancel', disabled: asked, on: { click: function () {
+            cancelling[job.Id] = true;
+            redraw();
+            call('/Retimer/Jobs/' + job.Id, { method: 'DELETE' }).then(pollJobs).catch(function (error) {
+                delete cancelling[job.Id];
+                redraw();
+                say(error.message);
+            });
+        } } });
     }
 
     document.addEventListener('visibilitychange', function () { if (!document.hidden) { pollJobs(); } });
@@ -325,6 +352,7 @@
         var rows = {};
         var openMenu = null;
         var drawnMissing = 0;
+        var settling = {};      // Videos whose job ended and whose new state is not read yet.
         var holder = h('div');
         show(h('p', { class: 'muted pad', text: 'Loading…' }));
 
@@ -400,39 +428,42 @@
             var state = job ? job.State : episode.State;
             var text = episode.Text;
             var detail = episode.Detail;
+
+            // The job ended and the show is not read again yet. The row waits for the result and offers nothing meanwhile,
+            // so it never looks as if the job had failed.
+            var finishing = !job && (settling[episode.Id] || state === 'queued' || state === 'working');
             if (job && job.State === 'working') {
-                text = job.StepText || 'Starting';
+                text = cancelling[job.Id] ? 'Cancelling…' : (job.StepText || 'Starting');
                 detail = job.StepNote;
             } else if (job) {
                 text = 'Queued';
                 detail = job.Position <= 1 ? 'Starts when the one before it is done' : (job.Position - 1) + ' more before it';
-            } else if (state === 'queued' || state === 'working') {
-                // The job ended after the show was read. The reload that is on its way brings the result.
-                state = 'none';
+            } else if (finishing) {
+                state = 'working';
                 text = 'Finishing…';
                 detail = null;
             }
 
             var stateBox = h('div', { class: 'state' },
                 h('div', { class: 'text' }, h('span', { class: 'dot ' + state }), h('span', { text: text })),
-                detail ? h('div', { class: 'muted small', text: detail }) : null);
+                detail ? h('div', { class: 'muted small', text: tidy(detail) }) : null);
             if (job && job.State === 'working' && job.Steps > 0) {
                 var bar = h('i');
                 bar.style.width = Math.round(100 * job.Step / job.Steps) + '%';
                 stateBox.append(h('div', { class: 'steps', title: 'Step ' + job.Step + ' of ' + job.Steps }, bar));
             }
-            if (!job && episode.FromPlugin && episode.FileName) {
-                stateBox.append(h('div', { class: 'muted small clip', title: episode.FileName, text: 'From ' + sourceName(episode.Source) + (episode.PickedBy ? ', picked by ' + episode.PickedBy : '') + ': ' + episode.FileName }));
+            if (!job && !finishing && episode.FromPlugin && episode.FileName) {
+                // The whole name is shown: its end is what tells the files of an episode apart.
+                stateBox.append(h('div', { class: 'muted small', text: 'From ' + sourceName(episode.Source) + (episode.PickedBy ? ', picked by ' + episode.PickedBy : '') }));
+                stateBox.append(h('div', { class: 'muted small fileName', text: episode.FileName }));
             }
 
             var actions = h('div', { class: 'actions' });
             if (job) {
                 if (job.MayCancel) {
-                    actions.append(h('button', { class: 'button', text: 'Cancel', on: { click: function () {
-                        run(call('/Retimer/Jobs/' + job.Id, { method: 'DELETE' }).then(pollJobs));
-                    } } }));
+                    actions.append(cancelButton(job, function () { say(null); drawRow(episode); }));
                 }
-            } else {
+            } else if (!finishing) {
                 var offer = offers(episode, state);
                 if (offer.main) {
                     actions.append(h('button', { class: 'button' + (offer.main.primary ? ' primary' : ''), text: offer.main.text, on: { click: offer.main.go } }));
@@ -470,7 +501,7 @@
         }
 
         function missingOf(episodes) {
-            return episodes.filter(function (e) { return (e.State === 'none' || e.State === 'failed') && e.CanSave && !activeFor(e.Id); });
+            return episodes.filter(function (e) { return (e.State === 'none' || e.State === 'failed') && e.CanSave && !activeFor(e.Id) && !settling[e.Id]; });
         }
 
         function getAll(episodes, where) {
@@ -478,7 +509,7 @@
             if (list.length === 0) { return; }
             var lines = [
                 'They are fetched one after the other, and you can leave this page meanwhile.',
-                status.RetimerReady ? 'Each one is also retimed with Retimer API, which takes about a minute and costs a few cents at most.' : null,
+                status.RetimerReady ? 'Each one is also retimed with Retimer API, which takes between half a minute and two minutes and costs a few cents at most.' : null,
                 status.ModelName ? status.ModelName + ' picks the files.' : null,
                 usageText(status.Usage)
             ];
@@ -552,12 +583,20 @@
         }
 
         function load() {
+            // What ended before this request is in its answer. What ends while it is on its way waits for the next one.
+            var settled = Object.keys(settling);
             return call('/Retimer/Shows/' + showId).then(function (answer) {
                 if (mine !== routeToken) { return; }
+                settled.forEach(function (id) { delete settling[id]; });
                 data = answer;
                 document.title = data.Name + ' · Subtitle Retimer';
                 if (!holder.parentNode) { show(holder); }
                 draw();
+            }, function (error) {
+                // Without an answer the rows show what was read last, with their buttons.
+                settled.forEach(function (id) { delete settling[id]; });
+                if (mine === routeToken && data) { draw(); }
+                throw error;
             });
         }
 
@@ -565,6 +604,9 @@
             if (!data) { return; }
             var here = changed.filter(function (job) { return job.ShowId === data.Id; });
             if (here.length === 0) { return; }
+            here.forEach(function (job) {
+                if (!isActive(job)) { settling[job.ItemId] = true; delete cancelling[job.Id]; }
+            });
             var byId = {};
             var all = [];
             data.Seasons.forEach(function (s) { s.Episodes.forEach(function (e) { byId[e.Id] = e; all.push(e); }); });
@@ -639,8 +681,9 @@
                     h('div', { class: 'muted small', text: meta }),
                     h('div', { class: 'small' },
                         file.Current ? h('span', { class: 'tag current', text: 'In use now' }) : null,
-                        file.SuggestedBy && first ? h('span', { class: 'tag suggested', text: 'Suggested by ' + file.SuggestedBy }) : null,
+                        file.SuggestedBy && first && !file.Tried && !file.RejectedBefore ? h('span', { class: 'tag suggested', text: 'Suggested by ' + file.SuggestedBy }) : null,
                         file.Tried ? h('span', { class: 'tag tried', text: 'Already tried: ' + file.Tried }) : null,
+                        file.RejectedBefore && !file.Tried ? h('span', { class: 'tag tried', text: 'A file of this release was rejected for another episode: ' + file.RejectedBefore }) : null,
                         h('span', { class: 'muted', text: file.Unusable || file.Reason || '' }))));
             radio.addEventListener('change', function () { chosen = file; mark(); });
             fileRows.push({ file: file, row: row });
@@ -769,6 +812,14 @@
 
         function draw() {
             var all = Object.keys(jobs).map(function (id) { return jobs[id]; }).sort(order);
+
+            // Only the newest job of a video offers to try again. An older one was tried again already.
+            var newest = {};
+            all.forEach(function (job) {
+                var key = job.ItemId + ':' + job.Language;
+                var at = new Date(job.Created).getTime();
+                if (!newest[key] || at > newest[key].at) { newest[key] = { at: at, id: job.Id }; }
+            });
             usage.textContent = usageText(status.Usage);
             usage.className = nearLimit(status.Usage) ? 'warn' : 'muted';
             if (clear) { clear.hidden = !all.some(function (job) { return !isActive(job); }); }
@@ -778,10 +829,12 @@
             }
             all.forEach(function (job) {
                 var active = isActive(job);
+                var latest = newest[job.ItemId + ':' + job.Language].id === job.Id;
                 var head = stateNames[job.State] || job.State;
                 var detail = job.Detail;
+                if (!active) { delete cancelling[job.Id]; }
                 if (job.State === 'working') {
-                    head = (job.StepText || 'Starting') + (job.Steps > 0 ? ' (step ' + job.Step + ' of ' + job.Steps + ')' : '');
+                    head = cancelling[job.Id] ? 'Cancelling…' : (job.StepText || 'Starting') + (job.Steps > 0 ? ' (step ' + job.Step + ' of ' + job.Steps + ')' : '');
                     detail = job.StepNote;
                 } else if (job.State === 'queued') {
                     detail = job.Position <= 1 ? 'Starts when the one before it is done' : (job.Position - 1) + ' more before it';
@@ -789,11 +842,9 @@
                 var dot = job.State === 'saved' ? 'retimed' : job.State === 'cancelled' ? '' : job.State;
                 var buttons = h('div', { class: 'row' });
                 if (active && job.MayCancel) {
-                    buttons.append(h('button', { class: 'button', text: 'Cancel', on: { click: function () {
-                        call('/Retimer/Jobs/' + job.Id, { method: 'DELETE' }).then(pollJobs).catch(function (error) { say(error.message); });
-                    } } }));
+                    buttons.append(cancelButton(job, draw));
                 }
-                if (!active && status.MayFetch && (job.State === 'failed' || job.State === 'cancelled' || job.State === 'nofit')) {
+                if (!active && latest && status.MayFetch && (job.State === 'failed' || job.State === 'cancelled' || job.State === 'nofit')) {
                     buttons.append(h('button', { class: 'button', text: 'Try again', on: { click: function () {
                         call('/Retimer/Jobs/' + job.Id + '/Retry', { method: 'POST' }).then(function (answer) {
                             say(answer.Refused || (answer.Skipped ? answer.SkippedBecause : null));
@@ -801,7 +852,7 @@
                         }).catch(function (error) { say(error.message); });
                     } } }));
                 }
-                if (!active && status.MayFetch && (job.State === 'failed' || job.State === 'nofit')) {
+                if (!active && latest && status.MayFetch && (job.State === 'failed' || job.State === 'nofit')) {
                     buttons.append(h('a', { class: 'button', href: '#/pick/' + job.ItemId, text: 'Choose a file' }));
                 }
                 buttons.append(h('a', { class: 'button quiet', href: '#/show/' + job.ShowId, text: 'Open show' }));
@@ -811,7 +862,7 @@
                     h('div', { class: 'poster' }, picture(job.ShowId, 'job', 120)),
                     h('div', { class: 'body' },
                         h('div', { class: 'head' }, h('span', { class: 'dot ' + dot }), h('span', { text: head })),
-                        detail ? h('div', { text: detail }) : null,
+                        detail ? h('div', { text: tidy(detail) }) : null,
                         h('div', {}, h('a', { href: '#/show/' + job.ShowId, text: job.ShowName }), h('span', { class: 'muted', text: ' · ' + job.ItemLabel + ' · ' + job.LanguageName })),
                         h('div', { class: 'muted small', text: [when, 'Started by ' + job.StartedBy, job.CostUsd > 0 ? 'Cost ' + money(job.CostUsd) : null].filter(Boolean).join(' · ') }),
                         job.Tried && job.Tried.length > 0 ? h('details', {},
@@ -1050,7 +1101,7 @@
                     secret('RetimerApiKey', 'Retimer API key', s.HasRetimerApiKey, 'The key for that address.'),
                     tester('retimer', 'Check Retimer API'),
                     h('h3', { text: 'What Retimer API compares a subtitle with' }),
-                    h('p', { class: 'hint', text: 'The plugin always sends the text subtitle tracks that are inside the video file, up to six. They are in sync with the video, and Retimer API picks the one to use.' }),
+                    h('p', { class: 'hint', text: 'The plugin sends the text subtitle tracks that are inside the video file. They are in sync with the video, and Retimer API picks the one to use. Tracks in the subtitle\'s own language and English ones go first, up to six. Tracks in other languages are sent only when none of those fits.' }),
                     h('div', { class: 'fieldLabel', text: 'Send the audio' }),
                     radios('SendAudio', [
                         { value: 'never', text: 'Never', hint: 'A video without a usable subtitle track is saved without retiming.' },
@@ -1116,7 +1167,7 @@
                 h('section', { class: 'panel' },
                     h('h2', { text: 'Limits for a day' }),
                     h('p', { class: 'hint', text: 'The plugin stops starting jobs when a limit is reached, and says so. The day ends at midnight UTC. 0 means no limit. ' + usageText(status.Usage) }),
-                    field('Subtitles fetched on one day', fields.MaxJobsPerDay),
+                    field('Jobs on one day', fields.MaxJobsPerDay, 'Every job that starts to work counts, also one that fails. A job that is cancelled while it waits does not.'),
                     field('Cost on one day, in US dollars', fields.MaxCostPerDay, 'Counted from what Retimer API and OpenRouter report for each job. A retimed episode usually costs one to three cents.')),
 
                 h('div', { class: 'saveBar' },

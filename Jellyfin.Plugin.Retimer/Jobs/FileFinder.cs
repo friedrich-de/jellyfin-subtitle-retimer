@@ -56,9 +56,13 @@ internal sealed record FindResult
 /// </summary>
 internal sealed class FileFinder
 {
+    /// <summary>How many kinds of rejected file are kept for a show.</summary>
+    internal const int MaxRejectedKinds = 40;
+
     private static readonly TimeSpan _listLifetime = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan _matchLifetime = TimeSpan.FromDays(30);
     private static readonly TimeSpan _noMatchLifetime = TimeSpan.FromHours(12);
+    private static readonly TimeSpan _rejectedLifetime = TimeSpan.FromDays(30);
 
     private readonly SubtitleSources _sources;
     private readonly ModelPicker _model;
@@ -216,7 +220,13 @@ internal sealed class FileFinder
                     files = await ListFilesAsync(source, query, null, cancellationToken).ConfigureAwait(false);
                 }
 
-                var ranked = RulesPicker.Rank(query, files, options);
+                var rejected = RejectedKinds(video, source.Id, language);
+                var ranked = RulesPicker.Rank(query, files, options)
+                    .Select(candidate => rejected.TryGetValue(RulesPicker.NamePattern(candidate.File.Name), out var why)
+                        ? candidate with { Score = candidate.Score - 45, RejectedBefore = why }
+                        : candidate)
+                    .OrderByDescending(candidate => candidate.Score)
+                    .ToList();
                 all.AddRange(files);
                 reports.Add(new SourceReport(source.Id, source.Name, entryId, entryName, files.Count, matchedBy, null));
 
@@ -225,7 +235,7 @@ internal sealed class FileFinder
                 {
                     try
                     {
-                        var (mapped, mapCost) = await MapAsync(source, video, query, entryId!, files, options, model!, note, cancellationToken).ConfigureAwait(false);
+                        var (mapped, mapCost) = await MapAsync(source, video, query, entryId!, files, options, model!, rejected, note, cancellationToken).ConfigureAwait(false);
                         cost += mapCost;
                         var listed = mapped.Select(c => c.File.Id).ToHashSet(StringComparer.Ordinal);
 
@@ -324,6 +334,37 @@ internal sealed class FileFinder
         return files;
     }
 
+    /// <summary>
+    /// Remembers that a file was rejected for a reason its release's files for the other episodes share,
+    /// so those come last from now on and are not suggested.
+    /// </summary>
+    public void RememberRejected(VideoInfo video, string language, SourceFile file, string reason)
+    {
+        var pattern = RulesPicker.NamePattern(file.Name);
+        _store.UpdateShow(video.ShowId, show =>
+        {
+            // The list is replaced, never changed in place: a snapshot may still read the old one.
+            var kept = show.Rejected.Where(kind => !(kind.Source == file.Source && kind.Language == language && kind.Pattern == pattern)).ToList();
+            kept.Add(new RejectedKind { Source = file.Source, Language = language, Pattern = pattern, Reason = reason, At = DateTimeOffset.UtcNow });
+            show.Rejected = kept.Count > MaxRejectedKinds ? kept.GetRange(kept.Count - MaxRejectedKinds, MaxRejectedKinds) : kept;
+        });
+    }
+
+    /// <summary>
+    /// Forgets what was held against a file's release, because a file of it was saved after all.
+    /// </summary>
+    public void ForgetRejected(VideoInfo video, string language, SourceFile file)
+    {
+        var pattern = RulesPicker.NamePattern(file.Name);
+        _store.UpdateShow(video.ShowId, show =>
+        {
+            if (show.Rejected.Any(kind => kind.Source == file.Source && kind.Language == language && kind.Pattern == pattern))
+            {
+                show.Rejected = show.Rejected.Where(kind => !(kind.Source == file.Source && kind.Language == language && kind.Pattern == pattern)).ToList();
+            }
+        });
+    }
+
     private static string Fingerprint(IReadOnlyList<SourceFile> files, IReadOnlyList<SeasonEpisode> episodes, string modelId)
     {
         var text = new StringBuilder(modelId).Append('\n');
@@ -340,6 +381,21 @@ internal sealed class FileFinder
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text.ToString())), 0, 12);
     }
 
+    /// <summary>The kinds of file that were rejected for another episode of the show, by name pattern, with the reason.</summary>
+    private Dictionary<string, string> RejectedKinds(VideoInfo video, string source, string language)
+    {
+        var kinds = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var kind in _store.Show(video.ShowId)?.Rejected ?? [])
+        {
+            if (kind.Source == source && kind.Language == language && DateTimeOffset.UtcNow - kind.At < _rejectedLifetime)
+            {
+                kinds[kind.Pattern] = kind.Reason;
+            }
+        }
+
+        return kinds;
+    }
+
     private async Task<(List<Candidate> Mapped, double Cost)> MapAsync(
         ISubtitleSource source,
         VideoInfo video,
@@ -348,6 +404,7 @@ internal sealed class FileFinder
         IReadOnlyList<SourceFile> files,
         PickOptions options,
         ModelEntry model,
+        Dictionary<string, string> rejected,
         Action<string?> note,
         CancellationToken cancellationToken)
     {
@@ -394,18 +451,52 @@ internal sealed class FileFinder
                     continue;
                 }
 
+                // The model reads names, and what a name plainly says stands over its order: a plain file goes
+                // before one with furigana or for the hearing impaired, those before one with a second language,
+                // and a kind of file that was already rejected for another episode comes last.
+                var notes = new List<string>();
+                var step = 0;
+                if (RulesPicker.HasFurigana(file))
+                {
+                    step = 1;
+                    notes.Add(RulesPicker.FuriganaNote);
+                }
+
+                if (RulesPicker.IsHearingImpaired(file))
+                {
+                    step = 1;
+                }
+
+                if (RulesPicker.HasSecondLanguage(file, query.Language))
+                {
+                    step = 2;
+                    notes.Add(RulesPicker.SecondLanguageNote);
+                }
+
+                var before = rejected.GetValueOrDefault(RulesPicker.NamePattern(file.Name));
+                if (before is not null)
+                {
+                    step = 3;
+                }
+
+                if (position == 0 && step == 0 && !string.IsNullOrEmpty(listed.Reason))
+                {
+                    notes.Insert(0, listed.Reason);
+                }
+
                 mapped.Add(new Candidate
                 {
                     File = file,
-                    Score = 120 - (position * 8),
-                    Reason = position == 0 ? listed.Reason ?? string.Empty : string.Empty,
-                    SuggestedBy = mapping.Model,
-                    Auto = true
+                    Score = 120 - (position * 8) - (step * 32),
+                    Reason = string.Join(" · ", notes),
+                    SuggestedBy = before is null ? mapping.Model : null,
+                    Auto = true,
+                    RejectedBefore = before
                 });
                 position++;
             }
         }
 
-        return (mapped, cost);
+        return (mapped.OrderByDescending(candidate => candidate.Score).ToList(), cost);
     }
 }

@@ -10,7 +10,7 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Plugin.Retimer.Jobs;
 
 /// <summary>
-/// What today's use of the plugin is, against the limits in the settings.
+/// What today's use of the plugin is, against the limits in the settings. A job counts from the moment it starts to work.
 /// </summary>
 internal sealed record UsageToday(int Jobs, int MaxJobs, double CostUsd, double MaxCostUsd);
 
@@ -180,14 +180,28 @@ internal sealed class JobQueue : IDisposable
     }
 
     /// <summary>
-    /// Why no new job may start now, or <c>null</c>.
+    /// Why no new job may be added now, or <c>null</c>. The jobs that wait have their place in today's limit already.
     /// </summary>
     public string? Refusal()
     {
-        var usage = Usage();
+        // Read together, so a job that starts in between is counted once: as waiting, or as started.
+        UsageToday usage;
+        int waiting;
+        lock (_lock)
+        {
+            usage = Usage();
+            waiting = _queued.Count;
+        }
+
+        var limit = string.Create(CultureInfo.InvariantCulture, $"Today's limit of {usage.MaxJobs} {(usage.MaxJobs == 1 ? "job" : "jobs")}");
         if (usage.MaxJobs > 0 && usage.Jobs >= usage.MaxJobs)
         {
-            return string.Create(CultureInfo.InvariantCulture, $"Today's limit of {usage.MaxJobs} subtitles is reached. It starts again at midnight (UTC), or an administrator raises it in the settings.");
+            return limit + " is reached. It starts again at midnight (UTC), or an administrator raises it in the settings.";
+        }
+
+        if (usage.MaxJobs > 0 && usage.Jobs + waiting >= usage.MaxJobs)
+        {
+            return string.Create(CultureInfo.InvariantCulture, $"{limit} is taken: {usage.Jobs} started and {waiting} waiting. It starts again at midnight (UTC), or an administrator raises it in the settings.");
         }
 
         if (usage.MaxCostUsd > 0 && usage.CostUsd >= usage.MaxCostUsd)
@@ -231,21 +245,6 @@ internal sealed class JobQueue : IDisposable
             _worker ??= Task.Run(WorkAsync);
         }
 
-        var today = PluginStore.Today();
-        _store.Update(data =>
-        {
-            if (!data.Usage.TryGetValue(today, out var usage))
-            {
-                usage = new DayUsage();
-                data.Usage[today] = usage;
-            }
-
-            usage.Jobs++;
-            foreach (var old in data.Usage.Keys.Where(day => string.CompareOrdinal(day, today) < 0).OrderByDescending(day => day, StringComparer.Ordinal).Skip(60).ToList())
-            {
-                data.Usage.Remove(old);
-            }
-        });
         Persist();
         return (clone, null);
     }
@@ -316,6 +315,28 @@ internal sealed class JobQueue : IDisposable
 
     private static bool Same(Job a, Job b) => a.ItemId == b.ItemId && string.Equals(a.Language, b.Language, StringComparison.Ordinal);
 
+    /// <summary>
+    /// Counts a job that starts to work toward today's limit. One that was cancelled while it waited never gets here.
+    /// </summary>
+    private void CountStarted()
+    {
+        var today = PluginStore.Today();
+        _store.Update(data =>
+        {
+            if (!data.Usage.TryGetValue(today, out var usage))
+            {
+                usage = new DayUsage();
+                data.Usage[today] = usage;
+            }
+
+            usage.Jobs++;
+            foreach (var old in data.Usage.Keys.Where(day => string.CompareOrdinal(day, today) < 0).OrderByDescending(day => day, StringComparer.Ordinal).Skip(60).ToList())
+            {
+                data.Usage.Remove(old);
+            }
+        });
+    }
+
     private void Touch(Job job)
     {
         lock (_lock)
@@ -371,6 +392,7 @@ internal sealed class JobQueue : IDisposable
         {
             Job job;
             CancellationTokenSource cancellation;
+            var refusal = CostRefusal();
             lock (_lock)
             {
                 if (_queued.Count == 0 || _shutdown.IsCancellationRequested)
@@ -391,13 +413,18 @@ internal sealed class JobQueue : IDisposable
                 {
                     waiting.Version = ++_version;
                 }
+
+                if (refusal is null)
+                {
+                    // Counted while the line is held, so the job is never neither waiting nor started.
+                    CountStarted();
+                }
             }
 
             Persist();
             var interrupted = false;
             try
             {
-                var refusal = CostRefusal();
                 if (refusal is not null)
                 {
                     job.State = JobState.Failed;

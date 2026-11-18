@@ -446,7 +446,7 @@ internal sealed class PageService
         string? TriedReason(SourceFile file) => record?.Tried.Find(t => t.Source == file.Source && t.FileId == file.Id)?.Reason;
         bool IsCurrent(SourceFile file) => record is { SavedAt: not null } && record.Source == file.Source && record.FileId == file.Id;
 
-        FileView Row(SourceFile file, bool fits, string reason, string? suggestedBy) => new()
+        FileView Row(SourceFile file, bool fits, string reason, string? suggestedBy, string? rejectedBefore = null) => new()
         {
             Source = file.Source,
             SourceName = NameOf(file.Source),
@@ -462,11 +462,16 @@ internal sealed class PageService
             SuggestedBy = suggestedBy,
             Fits = fits,
             Tried = TriedReason(file),
+            RejectedBefore = rejectedBefore,
             Current = IsCurrent(file),
             Unusable = RulesPicker.IsUsable(file, options) ? null : UnusableReason(file, options)
         };
 
-        var files = found.Candidates.Select(candidate => Row(candidate.File, candidate.Auto, candidate.Reason, candidate.SuggestedBy)).ToList();
+        // The model names a few files for an episode. What it left out and the rules still place at this
+        // episode by its name belongs to the episode's list too, after the model's.
+        var files = found.Candidates
+            .Select(candidate => Row(candidate.File, candidate.Auto || candidate.Score >= RulesPicker.AutoScore, candidate.Reason, candidate.SuggestedBy, candidate.RejectedBefore))
+            .ToList();
         files.AddRange(found.Others
             .OrderBy(file => file.Name, StringComparer.OrdinalIgnoreCase)
             .Select(file => Row(file, false, video.IsMovie ? "Not for this film, by its name" : "For another episode, by its name", null)));

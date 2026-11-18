@@ -132,7 +132,8 @@ internal static partial class FileNameParser
     [GeneratedRegex(@"[\[(]?(?<![0-9a-zA-Z.])(\d{1,3})\s*[-~～]\s*(\d{1,3})(?![0-9a-zA-Z])")]
     private static partial Regex Range();
 
-    [GeneratedRegex(@"(?i)(?<![a-z])(?:episode|ep|e)[ ._-]?(\d{1,4})(?:v\d)?(?![0-9a-z])")]
+    // Not after a digit either: the checksum "[84ECD0E2]" at the end of a name holds no episode.
+    [GeneratedRegex(@"(?i)(?<![a-z0-9])(?:episode|ep|e)[ ._-]?(\d{1,4})(?:v\d)?(?![0-9a-z])")]
     private static partial Regex EpisodeWord();
 
     [GeneratedRegex(@"第\s*(\d{1,4})\s*[話话集回]")]

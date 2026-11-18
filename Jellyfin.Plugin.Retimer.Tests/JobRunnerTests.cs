@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -111,9 +112,223 @@ public sealed class JobRunnerTests : IDisposable
         Assert.True(options["strip_formatting"]!.GetValue<bool>());
         Assert.False(options["remove_karaoke"]!.GetValue<bool>());
         Assert.False(options["remove_symbols"]!.GetValue<bool>());
+
+        // Lines the video's track does not have, such as the songs, are never taken out unasked.
+        Assert.False(options["drop_unmatched"]!.GetValue<bool>());
         Assert.Equal("ass", options["output_format"]!.ToString());
         Assert.Equal("ass", Assert.Single(_w.Library.Saved).Format);
         Assert.Equal(JobState.Saved, job.State);
+    }
+
+    [Fact]
+    public async Task Tracks_in_other_languages_and_captions_wait_while_a_plain_English_track_is_there()
+    {
+        var videos = _w.FateZero();
+        _w.RetimerOn();
+        _w.Library.Tracks =
+        [
+            Subtitles.Track("eng", "English"), Subtitles.Track("eng", "English[CC]"), Subtitles.Track("ita", "Italian"),
+            Subtitles.Track("ger", "German"), Subtitles.Track("eng", "Signs", forced: true)
+        ];
+
+        var job = await _w.RunAsync(_w.JobFor(videos[0]), Token);
+
+        var sent = Assert.Single(_w.Retimer.Submissions);
+        Assert.Equal(["English", "Signs"], sent.References.Select(track => track.Title));
+        Assert.Equal("Retimed against the English track “English” of the video. Moved 0.9 s later.", job.Detail);
+    }
+
+    [Fact]
+    public async Task When_the_English_tracks_do_not_fit_the_videos_other_tracks_are_tried()
+    {
+        var videos = _w.FateZero();
+        _w.RetimerOn();
+        _w.Library.Tracks = [Subtitles.Track("eng", "Dub"), Subtitles.Track("ita", "Italian"), Subtitles.Track("ger", "German")];
+        _w.Retimer.Outcomes.Enqueue(_ => FakeRetimerApi.NoMatch("no_match"));
+        _w.Retimer.Outcomes.Enqueue(_ => FakeRetimerApi.Synced(chosen: 1));
+
+        var job = await _w.RunAsync(_w.JobFor(videos[0]), Token);
+
+        Assert.Equal(JobState.Saved, job.State);
+        Assert.Equal(2, _w.Retimer.Submissions.Count);
+        Assert.Equal(["Dub"], _w.Retimer.Submissions[0].References.Select(track => track.Title));
+        Assert.Equal(["Italian", "German"], _w.Retimer.Submissions[1].References.Select(track => track.Title));
+        Assert.Equal("Retimed against the German track “German” of the video, since its English track does not fit. Moved 0.9 s later.", job.Detail);
+        Assert.Equal(2, _w.Retimer.Deleted.Count);
+        Assert.Empty(job.Tried);
+    }
+
+    [Theory]
+    [InlineData("jpn,eng,ita", "jpn,eng", "ita")]
+    [InlineData("eng,jpn,ita", "jpn,eng", "ita")]
+    [InlineData("eng,eng", "eng,eng", "")]
+    [InlineData("ita,ger", "ita,ger", "")]
+    [InlineData("eng!,ita", "eng!,ita", "")]
+    [InlineData("eng,eng+,ita", "eng", "eng+,ita")]
+    [InlineData("eng+,fre", "eng+", "fre")]
+    [InlineData("ita,eng,ger,eng!", "eng,eng!", "ita,ger")]
+    public void The_tracks_in_the_subtitles_language_and_in_English_are_compared_first(string tracks, string first, string later)
+    {
+        // "!" marks a forced track, "+" captions for the hearing impaired.
+        static ReferenceUpload Make(string code) => Subtitles.Track(code.TrimEnd('!', '+'), code, forced: code.EndsWith('!'), hearingImpaired: code.EndsWith('+'));
+
+        var (one, two) = JobRunner.SplitTracks(tracks.Split(',').Select(Make).ToList(), "ja", 6);
+
+        Assert.Equal(first, string.Join(',', one.Select(track => track.Title)));
+        Assert.Equal(later, string.Join(',', two.Select(track => track.Title)));
+    }
+
+    [Fact]
+    public void No_more_tracks_are_sent_in_one_job_than_Retimer_API_takes()
+    {
+        var tracks = Enumerable.Range(0, 9).Select(i => Subtitles.Track(i < 4 ? "eng" : "fre", "T" + i)).ToList();
+
+        var (first, later) = JobRunner.SplitTracks(tracks, "ja", 3);
+
+        Assert.Equal(["T0", "T1", "T2"], first.Select(track => track.Title));
+        Assert.Equal(["T4", "T5", "T6"], later.Select(track => track.Title));
+    }
+
+    [Theory]
+    [InlineData("English[CC]", true)]
+    [InlineData("English (SDH)", true)]
+    [InlineData("Closed captions", true)]
+    [InlineData("For the hearing impaired", true)]
+    [InlineData("English", false)]
+    [InlineData("Soccer", false)]
+    [InlineData(null, false)]
+    public void Captions_for_the_hearing_impaired_are_known_by_a_tracks_title(string? title, bool expected)
+    {
+        Assert.Equal(expected, Subtitles.Track("eng", title).ForHearingImpaired);
+        Assert.True(Subtitles.Track("eng", title, hearingImpaired: true).ForHearingImpaired);
+    }
+
+    [Fact]
+    public async Task What_a_name_plainly_says_stands_over_the_models_order()
+    {
+        var showId = Guid.NewGuid();
+        var video = _w.Library.AddEpisode(showId, "Fate/Zero", 1, 1, "Episode 1");
+        _w.Settings.Current.OpenRouterApiKey = "or-key";
+        _w.Settings.Current.JimakuApiKey = "jimaku-key";
+        _w.Source.AddEntry("384", "Fate/Zero", 10087);
+        _w.Source.AddFile("[Kami] Fate Zero - 01 [BD][CHS, JPN].ass", "384");
+        _w.Source.AddFile("[Kami] Fate Zero - 01 [BD].Jap&furigana.srt", "384");
+        _w.Source.AddFile("[UTW] Fate Zero - 01 [BD].srt", "384");
+
+        var job = await _w.RunAsync(_w.JobFor(video), Token);
+
+        // The model listed the three in the source's order. The plain file is tried first all the same.
+        Assert.Equal(JobState.SavedRaw, job.State);
+        Assert.Equal(["[UTW] Fate Zero - 01 [BD].srt"], _w.Source.Downloads);
+
+        var (view, _) = await _w.Page.FilesAsync(_w.Admin, video.Id, Token);
+        Assert.Equal(
+            ["[UTW] Fate Zero - 01 [BD].srt", "[Kami] Fate Zero - 01 [BD].Jap&furigana.srt", "[Kami] Fate Zero - 01 [BD][CHS, JPN].ass"],
+            view!.Files.Where(file => file.Fits).Select(file => file.Name));
+        Assert.Equal("with furigana", view.Files[1].Reason);
+        Assert.Equal("has a second language", view.Files[2].Reason);
+    }
+
+    [Fact]
+    public async Task A_file_of_the_episode_that_the_model_left_out_is_listed_with_the_episodes_files_and_not_tried_unasked()
+    {
+        var showId = Guid.NewGuid();
+        var video = _w.Library.AddEpisode(showId, "Fate/Zero", 1, 1, "Episode 1");
+        _w.Settings.Current.OpenRouterApiKey = "or-key";
+        _w.Settings.Current.JimakuApiKey = "jimaku-key";
+        _w.Source.AddEntry("384", "Fate/Zero", 10087);
+        _w.Source.AddFile("[UTW] Fate Zero - 01 [BD].srt", "384", Subtitles.English);
+        _w.Source.AddFile("[Kami] Fate Zero - 01 [BD].srt", "384");
+        _w.Source.AddFile("[UTW] Fate Zero - 02 [BD].srt", "384");
+
+        // The model names one file for the episode, as it does when an entry holds many.
+        _w.Model.Tools["map_files"] = messages =>
+        {
+            var line = messages[1]!["content"]!.ToString().Split('\n').Single(l => l.Contains("[UTW] Fate Zero - 01", StringComparison.Ordinal));
+            var number = int.Parse(line[..line.IndexOf(' ', StringComparison.Ordinal)], CultureInfo.InvariantCulture);
+            return new JsonObject
+            {
+                ["episodes"] = new JsonArray(new JsonObject { ["episode"] = 1, ["files"] = new JsonArray(number), ["reason"] = "the release of the video" })
+            };
+        };
+
+        var job = await _w.RunAsync(_w.JobFor(video), Token);
+
+        // The model's file is not Japanese. The other file of the episode is not tried unasked.
+        Assert.Equal(JobState.NoFit, job.State);
+        Assert.Equal(["[UTW] Fate Zero - 01 [BD].srt"], _w.Source.Downloads);
+
+        // The picker lists both files of the episode, the one that was tried and rejected last.
+        var (view, _) = await _w.Page.FilesAsync(_w.Admin, video.Id, Token);
+        Assert.Equal(
+            ["[Kami] Fate Zero - 01 [BD].srt", "[UTW] Fate Zero - 01 [BD].srt"],
+            view!.Files.Where(file => file.Fits).Select(file => file.Name));
+        Assert.Null(view.Files[0].SuggestedBy);
+        Assert.Null(view.Files[0].Tried);
+        Assert.NotNull(view.Files[1].Tried);
+        Assert.False(view.Files.Single(file => file.Name.Contains("- 02", StringComparison.Ordinal)).Fits);
+    }
+
+    [Fact]
+    public async Task A_release_that_was_rejected_for_its_language_is_not_tried_first_for_the_next_episode()
+    {
+        var showId = Guid.NewGuid();
+        var videos = Enumerable.Range(1, 2).Select(i => _w.Library.AddEpisode(showId, "Fate/Zero", 1, i, "Episode " + i)).ToList();
+        _w.Settings.Current.OpenRouterApiKey = "or-key";
+        _w.Settings.Current.JimakuApiKey = "jimaku-key";
+        _w.Source.AddEntry("384", "Fate/Zero", 10087);
+        foreach (var i in new[] { 1, 2 })
+        {
+            _w.Source.AddFile($"[Kami] Fate Zero - {i:00} [BD 1920x1080].ass.srt", "384", Subtitles.JapaneseWithChinese);
+            _w.Source.AddFile($"[UTW] Fate Zero - {i:00} [BD].srt", "384");
+        }
+
+        // The model reads the sample and finds the second language, as the real one does.
+        _w.Model.Tools["language_verdict"] = messages => new JsonObject
+        {
+            ["language"] = "ja",
+            ["second_language"] = messages[1]!["content"]!.ToString().Contains("你好", StringComparison.Ordinal) ? "zh" : null,
+            ["reason"] = "read from the sample"
+        };
+
+        var first = await _w.RunAsync(_w.JobFor(videos[0]), Token);
+
+        Assert.Equal(JobState.SavedRaw, first.State);
+        Assert.Equal(["[Kami] Fate Zero - 01 [BD 1920x1080].ass.srt", "[UTW] Fate Zero - 01 [BD].srt"], _w.Source.Downloads);
+        Assert.Equal("the text is Japanese with Chinese, not Japanese (Test Model)", Assert.Single(first.Tried).Reason);
+
+        // The second episode: the release that was rejected comes last now, and the page says why.
+        var (view, _) = await _w.Page.FilesAsync(_w.Admin, videos[1].Id, Token);
+        var fitting = view!.Files.Where(file => file.Fits).ToList();
+        Assert.Equal(["[UTW] Fate Zero - 02 [BD].srt", "[Kami] Fate Zero - 02 [BD 1920x1080].ass.srt"], fitting.Select(file => file.Name));
+        Assert.Equal("Test Model", fitting[0].SuggestedBy);
+        Assert.Null(fitting[1].SuggestedBy);
+        Assert.Equal("the text is Japanese with Chinese, not Japanese (Test Model)", fitting[1].RejectedBefore);
+
+        _w.Source.Downloads.Clear();
+        var second = await _w.RunAsync(_w.JobFor(videos[1]), Token);
+
+        Assert.Equal(JobState.SavedRaw, second.State);
+        Assert.Equal(["[UTW] Fate Zero - 02 [BD].srt"], _w.Source.Downloads);
+        Assert.Empty(second.Tried);
+    }
+
+    [Fact]
+    public async Task A_release_the_user_saved_by_hand_is_not_held_against_any_more()
+    {
+        var videos = _w.FateZero(2);
+        var file = _w.Source.Files[0];
+        _w.Finder.RememberRejected(videos[0], "ja", file, "the text is Chinese, not Japanese");
+        Assert.Single(_w.Store.Show(videos[0].ShowId)!.Rejected);
+
+        var job = _w.JobFor(videos[0], JobKind.Chosen);
+        job.ChosenSource = file.Source;
+        job.ChosenEntryId = file.EntryId;
+        job.ChosenFileId = file.Id;
+        await _w.RunAsync(job, Token);
+
+        Assert.Equal(JobState.SavedRaw, job.State);
+        Assert.Empty(_w.Store.Show(videos[0].ShowId)!.Rejected);
     }
 
     [Fact]

@@ -117,7 +117,7 @@ internal sealed class FakeLibrary : IVideoLibrary
             .ToList();
     }
 
-    public Task<IReadOnlyList<ReferenceUpload>> ReadTextTracksAsync(Guid itemId, int max, IReadOnlyCollection<string> skipPaths, string scratchDirectory, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<ReferenceUpload>> ReadTextTracksAsync(Guid itemId, string language, int max, IReadOnlyCollection<string> skipPaths, string scratchDirectory, CancellationToken cancellationToken)
     {
         SkippedPaths.Add(skipPaths);
         return Task.FromResult<IReadOnlyList<ReferenceUpload>>(Tracks.Take(max).ToList());
@@ -434,8 +434,14 @@ internal static class Subtitles
         + "2\n00:00:04,000 --> 00:00:06,000\nIt is. Shall we go for a walk together?\n\n"
         + "3\n00:00:07,000 --> 00:00:09,000\nYes, let us walk as far as the park.\n";
 
-    public static ReferenceUpload Track(string language, string? title = null, bool isDefault = false, bool forced = false) =>
-        new("track.srt", Encoding.UTF8.GetBytes(English), language, title, isDefault, forced);
+    public static ReferenceUpload Track(string language, string? title = null, bool isDefault = false, bool forced = false, bool hearingImpaired = false) =>
+        new("track.srt", Encoding.UTF8.GetBytes(English), language, title, isDefault, forced, hearingImpaired);
+
+    /// <summary>Japanese lines with a Chinese line under each, as a file with two languages has them.</summary>
+    public const string JapaneseWithChinese =
+        "1\n00:00:01,000 --> 00:00:03,000\nこんにちは、今日はいい天気ですね。\n你好，今天天气真好。\n\n"
+        + "2\n00:00:04,000 --> 00:00:06,000\nそうですね。散歩に行きましょうか。\n是啊，我们去散步吧。\n\n"
+        + "3\n00:00:07,000 --> 00:00:09,000\nはい、公園まで歩いていきましょう。\n好的，我们走到公园去吧。\n";
 }
 
 /// <summary>

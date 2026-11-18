@@ -35,6 +35,9 @@ internal sealed class JobRunner
     /// <summary>How many files are tried for one video before the job gives up.</summary>
     internal const int MaxAttempts = 3;
 
+    /// <summary>How many of a video's text tracks are read. Retimer API gets fewer in one job.</summary>
+    internal const int MaxTracksRead = 12;
+
     internal const string StepSearch = "Searching the sources";
     internal const string StepChoose = "Choosing a file";
     internal const string StepDownload = "Downloading";
@@ -134,6 +137,13 @@ internal sealed class JobRunner
                 _logger.LogDebug(ex, "The job's temporary folder {Path} could not be removed", scratch);
             }
         }
+    }
+
+    private static string DoNotFit(List<ReferenceUpload> tracks)
+    {
+        var names = tracks.Select(track => Languages.Find(track.Language)?.Name).Where(name => name is not null).Distinct().ToList();
+        var which = names.Count == 0 ? string.Empty : string.Join(" and ", names) + " ";
+        return tracks.Count == 1 ? "since its " + which + "track does not fit" : "since its " + which + "tracks do not fit";
     }
 
     private static string SafeFileName(string name)
@@ -268,7 +278,8 @@ internal sealed class JobRunner
             var source = _sources.Find(file.Source) ?? throw new JobFailedException("The source of the chosen file is not set up.");
             var chosenByUser = job.Kind == JobKind.Chosen;
 
-            void Reject(string reason)
+            // "wholeRelease" says the reason holds for the release's files of the other episodes too.
+            void Reject(string reason, bool wholeRelease = false)
             {
                 var tried = new TriedFile { Source = file.Source, FileId = file.Id, Name = file.Name, Reason = reason, At = DateTimeOffset.UtcNow };
                 job.Tried.Add(tried);
@@ -277,6 +288,10 @@ internal sealed class JobRunner
                     item.Tried.RemoveAll(t => t.Source == tried.Source && t.FileId == tried.FileId);
                     item.Tried.Add(tried);
                 });
+                if (wholeRelease)
+                {
+                    _finder.RememberRejected(video, language, file, reason);
+                }
             }
 
             // Download, and take the episode's file out of a pack.
@@ -368,7 +383,8 @@ internal sealed class JobRunner
 
             if (languageWarning is not null && !chosenByUser)
             {
-                Reject(languageWarning);
+                // A release is in the same languages for every episode, so its other files are not tried first again.
+                Reject(languageWarning, wholeRelease: true);
                 continue;
             }
 
@@ -518,6 +534,7 @@ internal sealed class JobRunner
             item.NoFit = false;
             item.LastError = null;
         });
+        _finder.ForgetRejected(video, language, file);
 
         job.State = retimed ? JobState.Saved : JobState.SavedRaw;
         job.Detail = note;
@@ -648,9 +665,9 @@ internal sealed class JobRunner
             .Where(pair => pair.Key.StartsWith(job.ItemId.ToString("N"), StringComparison.Ordinal) && pair.Value.SavedPath.Length > 0)
             .Select(pair => pair.Value.SavedPath)
             .ToList());
-        var tracks = (await _library.ReadTextTracksAsync(job.ItemId, 6, mine, scratch, cancellationToken).ConfigureAwait(false)).ToList();
+        var all = (await _library.ReadTextTracksAsync(job.ItemId, language, MaxTracksRead, mine, scratch, cancellationToken).ConfigureAwait(false)).ToList();
 
-        if (tracks.Count == 0 && configuration.ConvertPictureSubtitles && features.Ocr && video.IsLocalFile)
+        if (all.Count == 0 && configuration.ConvertPictureSubtitles && features.Ocr && video.IsLocalFile)
         {
             var picture = await _library.ReadPictureTrackAsync(job.ItemId, scratch, cancellationToken).ConfigureAwait(false);
             if (picture is not null)
@@ -660,17 +677,21 @@ internal sealed class JobRunner
                 job.CostUsd += ocrCost;
                 if (text is not null)
                 {
-                    tracks.Add(picture with { FileName = "track.srt", Content = text });
+                    all.Add(picture with { FileName = "track.srt", Content = text });
                 }
             }
         }
 
-        if (tracks.Count > features.MaxReferenceSubtitles)
+        List<ReferenceUpload> tracks;
+        List<ReferenceUpload> later = [];
+        if (features.MaxReferenceSubtitles <= 1)
         {
             // An older Retimer API takes one track: the default one that is not forced, else the first.
-            tracks = features.MaxReferenceSubtitles <= 1
-                ? [tracks.FirstOrDefault(t => t.IsDefault && !t.IsForced) ?? tracks.FirstOrDefault(t => !t.IsForced) ?? tracks[0]]
-                : tracks.Take(features.MaxReferenceSubtitles).ToList();
+            tracks = all.Count == 0 ? [] : [all.FirstOrDefault(t => t.IsDefault && !t.IsForced) ?? all.FirstOrDefault(t => !t.IsForced) ?? all[0]];
+        }
+        else
+        {
+            (tracks, later) = SplitTracks(all, language, features.MaxReferenceSubtitles);
         }
 
         var mode = configuration.SendAudio;
@@ -734,15 +755,26 @@ internal sealed class JobRunner
         progress.Step(StepRetime);
         var first = await SubmitAsync(job, targetName, target, tracks, withAudio ? audioPath : null, language, features, progress, cancellationToken).ConfigureAwait(false);
         var outcome = Judge(first, tracks, withAudio);
+        if (outcome.Kind != RetimeKind.Retimed && outcome.TracksDoNotFit && later.Count > 0)
+        {
+            // The tracks in the subtitle's language and in English do not fit, so the video's other tracks are tried.
+            await _retimer.DeleteJobAsync(first.Id, CancellationToken.None).ConfigureAwait(false);
+            progress.Step(StepRetime, "Trying the video's other subtitle tracks");
+            var because = DoNotFit(tracks);
+            tracks = later;
+            first = await SubmitAsync(job, targetName, target, tracks, withAudio ? audioPath : null, language, features, progress, cancellationToken).ConfigureAwait(false);
+            outcome = Judge(first, tracks, withAudio, because);
+        }
+
         if (outcome.Kind != RetimeKind.Retimed && outcome.TracksDoNotFit && !withAudio && mode == PluginConfiguration.AudioFallback)
         {
             // No track of the video fits. The audio settles whether the tracks or the subtitle are the odd ones.
+            await _retimer.DeleteJobAsync(first.Id, CancellationToken.None).ConfigureAwait(false);
             if (await PrepareAudioAsync().ConfigureAwait(false))
             {
                 progress.Step(StepRetime, "No subtitle track fits, trying the audio");
-                var second = await SubmitAsync(job, targetName, target, [], audioPath, language, features, progress, cancellationToken).ConfigureAwait(false);
-                outcome = Judge(second, [], true);
-                first = second;
+                first = await SubmitAsync(job, targetName, target, [], audioPath, language, features, progress, cancellationToken).ConfigureAwait(false);
+                outcome = Judge(first, [], true);
             }
             else
             {
@@ -785,7 +817,11 @@ internal sealed class JobRunner
             ["remove_hearing_impaired"] = configuration.RemoveHearingImpaired,
             ["remove_karaoke"] = configuration.RemoveSongs,
             ["strip_formatting"] = configuration.RemoveStyling,
-            ["remove_symbols"] = configuration.RemoveSymbols
+            ["remove_symbols"] = configuration.RemoveSymbols,
+
+            // Lines the video's track does not have, such as the songs of the opening and the ending,
+            // stay in the subtitle. Only the clean-up switches above take lines out.
+            ["drop_unmatched"] = false
         };
         if (features.RemoveSignsAndCredits && configuration.RemoveSignsAndCredits)
         {
@@ -845,7 +881,7 @@ internal sealed class JobRunner
         return finished;
     }
 
-    private static (RetimeKind Kind, string Detail, bool TracksDoNotFit) Judge(RetimerJob finished, List<ReferenceUpload> tracks, bool withAudio)
+    private static (RetimeKind Kind, string Detail, bool TracksDoNotFit) Judge(RetimerJob finished, List<ReferenceUpload> tracks, bool withAudio, string? because = null)
     {
         var noTrackChosen = tracks.Count > 0 && finished.HasReferenceReport && finished.ChosenReference is null;
 
@@ -858,7 +894,7 @@ internal sealed class JobRunner
         {
             if (tracks.Count > 0 && finished.ChosenReference is { } index && index >= 0 && index < tracks.Count)
             {
-                return "Retimed against " + Describe(tracks[index]) + " of the video" + (withAudio ? ", checked against the audio." : ".");
+                return "Retimed against " + Describe(tracks[index]) + " of the video" + (because is null ? string.Empty : ", " + because) + (withAudio ? ", checked against the audio." : ".");
             }
 
             if (withAudio)
@@ -886,6 +922,34 @@ internal sealed class JobRunner
             default:
                 throw new JobFailedException("Retimer API ended the job with an outcome the plugin does not know: " + finished.Outcome + ".");
         }
+    }
+
+    /// <summary>
+    /// The tracks the subtitle is compared with first, and the ones to fall back on when none of those fits.
+    /// The first are the tracks in the subtitle's own language and the English ones: a track in another
+    /// language is as likely to match, and its timing can differ from the English one's by a few tenths of a second.
+    /// </summary>
+    /// <param name="tracks">The video's text tracks, best first.</param>
+    /// <param name="language">The subtitle's language.</param>
+    /// <param name="max">How many tracks Retimer API takes in one job.</param>
+    internal static (List<ReferenceUpload> First, List<ReferenceUpload> Later) SplitTracks(IReadOnlyList<ReferenceUpload> tracks, string language, int max)
+    {
+        max = Math.Max(1, max);
+        var near = tracks.Where(track => Languages.Matches(track.Language, language) || Languages.Matches(track.Language, "en")).ToList();
+
+        // Captions for the hearing impaired often follow a dubbed audio. A plain track goes before them.
+        if (near.Any(track => !track.ForHearingImpaired && !track.IsForced))
+        {
+            near = near.Where(track => !track.ForHearingImpaired).ToList();
+        }
+
+        if (near.Count == tracks.Count || !near.Any(track => !track.IsForced))
+        {
+            return (tracks.Take(max).ToList(), []);
+        }
+
+        var first = near.OrderBy(track => !Languages.Matches(track.Language, language)).Take(max).ToList();
+        return (first, tracks.Where(track => !near.Contains(track)).Take(max).ToList());
     }
 
     /// <summary>

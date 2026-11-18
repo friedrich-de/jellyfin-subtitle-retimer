@@ -252,7 +252,7 @@ internal sealed class JellyfinVideoLibrary : IVideoLibrary
             .ToList();
     }
 
-    public async Task<IReadOnlyList<ReferenceUpload>> ReadTextTracksAsync(Guid itemId, int max, IReadOnlyCollection<string> skipPaths, string scratchDirectory, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<ReferenceUpload>> ReadTextTracksAsync(Guid itemId, string language, int max, IReadOnlyCollection<string> skipPaths, string scratchDirectory, CancellationToken cancellationToken)
     {
         if (_libraryManager.GetItemById(itemId) is not Video video)
         {
@@ -270,10 +270,11 @@ internal sealed class JellyfinVideoLibrary : IVideoLibrary
             .Where(stream => stream.Type == MediaStreamType.Subtitle && stream.IsTextSubtitleStream)
             .Where(stream => !stream.IsExternal || (stream.Path is not null && !skipPaths.Contains(stream.Path)))
 
-            // A video can hold more tracks than Retimer API takes. Tracks inside the file come first,
-            // forced tracks, which hold only signs, last, and the default track before the others.
+            // A video can hold more tracks than are read. Tracks inside the file come first, forced tracks,
+            // which hold only signs, last. Then the subtitle's own language, English, and the default track.
             .OrderBy(stream => stream.IsExternal)
             .ThenBy(stream => stream.IsForced)
+            .ThenBy(stream => Languages.Matches(stream.Language, language) ? 0 : Languages.Matches(stream.Language, "en") ? 1 : 2)
             .ThenByDescending(stream => stream.IsDefault)
             .ThenBy(stream => stream.Index)
             .Take(max)
@@ -317,7 +318,7 @@ internal sealed class JellyfinVideoLibrary : IVideoLibrary
                 }
 
                 var name = string.Create(CultureInfo.InvariantCulture, $"track{track.Index}.{format}");
-                uploads.Add(new ReferenceUpload(name, content, track.Language, track.Title, track.IsDefault, track.IsForced));
+                uploads.Add(new ReferenceUpload(name, content, track.Language, track.Title, track.IsDefault, track.IsForced, track.IsHearingImpaired));
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {

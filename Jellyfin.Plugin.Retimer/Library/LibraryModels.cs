@@ -160,8 +160,11 @@ internal interface IVideoLibrary
     /// <summary>The episodes of the video's season, for a model that matches files to all of them at once.</summary>
     IReadOnlyList<SeasonEpisode> GetSeasonEpisodes(Guid itemId);
 
-    /// <summary>Reads the video's text subtitle tracks as files, leaving out the given external files. The folder is for work files.</summary>
-    Task<IReadOnlyList<ReferenceUpload>> ReadTextTracksAsync(Guid itemId, int max, IReadOnlyCollection<string> skipPaths, string scratchDirectory, CancellationToken cancellationToken);
+    /// <summary>
+    /// Reads the video's text subtitle tracks as files, leaving out the given external files. Tracks in the
+    /// given language and English ones come first, so they are among those read. The folder is for work files.
+    /// </summary>
+    Task<IReadOnlyList<ReferenceUpload>> ReadTextTracksAsync(Guid itemId, string language, int max, IReadOnlyCollection<string> skipPaths, string scratchDirectory, CancellationToken cancellationToken);
 
     /// <summary>Reads the first picture subtitle track (PGS) inside the video, or <c>null</c>.</summary>
     Task<ReferenceUpload?> ReadPictureTrackAsync(Guid itemId, string outputDirectory, CancellationToken cancellationToken);

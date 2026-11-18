@@ -24,6 +24,9 @@ internal sealed record Candidate
 
     /// <summary>Gets a value indicating whether the plugin may try the file by itself, without the user choosing it.</summary>
     public bool Auto { get; init; }
+
+    /// <summary>Gets why a file of the same release was rejected for another episode of the show, or <c>null</c>.</summary>
+    public string? RejectedBefore { get; init; }
 }
 
 /// <summary>
@@ -47,6 +50,9 @@ internal static class RulesPicker
     /// episode, the source lists it for the video, or it is a pack that names the episode's range.
     /// </summary>
     internal const int AutoScore = 20;
+
+    internal const string SecondLanguageNote = "has a second language";
+    internal const string FuriganaNote = "with furigana";
 
     private static readonly string[] _secondLanguageMarks =
     [
@@ -109,17 +115,16 @@ internal static class RulesPicker
                 continue;
             }
 
-            var lower = file.Name.ToLowerInvariant();
-            if (video.Language == "ja" && _secondLanguageMarks.Any(mark => lower.Contains(mark, StringComparison.Ordinal)))
+            if (HasSecondLanguage(file, video.Language))
             {
                 score -= 30;
-                reasons.Add("has a second language");
+                reasons.Add(SecondLanguageNote);
             }
 
-            if (lower.Contains("furigana", StringComparison.Ordinal))
+            if (HasFurigana(file))
             {
                 score -= 10;
-                reasons.Add("with furigana");
+                reasons.Add(FuriganaNote);
             }
 
             if (file.MachineTranslated)
@@ -175,6 +180,54 @@ internal static class RulesPicker
             .OrderByDescending(candidate => candidate.Score)
             .ThenBy(candidate => candidate.File.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    /// <summary>
+    /// Whether a file's name says it holds a second language next to the wanted one. Only Japanese is judged:
+    /// the marks are those of files with Japanese and a translation.
+    /// </summary>
+    public static bool HasSecondLanguage(SourceFile file, string language)
+    {
+        if (language != "ja")
+        {
+            return false;
+        }
+
+        var lower = file.Name.ToLowerInvariant();
+        return _secondLanguageMarks.Any(mark => lower.Contains(mark, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Whether a file's name says it carries furigana, which many players show as lines of their own.
+    /// </summary>
+    public static bool HasFurigana(SourceFile file) => file.Name.Contains("furigana", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A file's name with every number left out, in lower case. The files of one release for the episodes
+    /// of a show share it, so what was found out about one of them can be held against the others.
+    /// </summary>
+    public static string NamePattern(string name)
+    {
+        var pattern = new System.Text.StringBuilder(name.Length);
+        var inNumber = false;
+        foreach (var c in name.ToLowerInvariant())
+        {
+            if (char.IsDigit(c))
+            {
+                if (!inNumber)
+                {
+                    pattern.Append('#');
+                }
+
+                inNumber = true;
+                continue;
+            }
+
+            inNumber = false;
+            pattern.Append(c);
+        }
+
+        return pattern.ToString();
     }
 
     /// <summary>

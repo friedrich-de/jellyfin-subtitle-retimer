@@ -258,6 +258,9 @@ internal sealed record FileView
     /// <summary>Gets why the file was rejected when it was tried before, or <c>null</c>.</summary>
     public string? Tried { get; init; }
 
+    /// <summary>Gets why a file of the same release was rejected for another episode of the show, or <c>null</c>.</summary>
+    public string? RejectedBefore { get; init; }
+
     /// <summary>Gets a value indicating whether this is the file the saved subtitle came from.</summary>
     public bool Current { get; init; }
 

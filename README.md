@@ -28,14 +28,22 @@ It builds for **Jellyfin 12.4** (.NET 10) and installs through Jellyfin's own pl
    source's entry for the show and matches the listed files to the season's episodes. It only ever
    chooses among files the sources list. Without a model, or when it gives no answer, the plugin
    picks by ids and by the episode number in the file name, or stops and asks, as you set it.
+   What a name plainly says stands over the model's order: a plain file goes before one with
+   furigana or for the hearing impaired, and those before one that names a second language.
 3. **Check the language.** A sample of the downloaded file is checked by its script, and by the
    model for languages that share a script. A file in another language is skipped and the next one
-   is tried, three files at most.
+   is tried, three files at most. The plugin remembers the release for the show, so its files for
+   the other episodes are tried last and the picker says why.
 4. **Retime**, if Retimer API is switched on. The plugin cuts the text subtitle tracks out of the
-   video with Jellyfin's ffmpeg, six at most, and sends them with the downloaded subtitle. Retimer
-   API chooses the track that fits and moves the subtitle's lines to it. The video's audio is sent
-   never, only when no track fits, or always, as you set it. Picture subtitles (PGS), in the video
-   or from a source, can be read into text by Retimer API first.
+   video with Jellyfin's ffmpeg and sends them with the downloaded subtitle, six at most in one
+   job. The tracks in the subtitle's own language and the English ones go first, and a plain track
+   before captions for the hearing impaired, which often follow a dubbed audio. The video's other
+   tracks are sent only when none of those fits. Retimer API chooses the track that fits and moves
+   the subtitle's lines to it. Every line stays: lines the track does not have, such as the songs
+   of the opening and the ending, move along with the rest, and only the clean-up switches in the
+   settings take lines out. The video's audio is sent never, only when no track fits, or always,
+   as you set it. Picture subtitles (PGS), in the video or from a source, can be read into text by
+   Retimer API first.
 5. **Save.** The subtitle goes through Jellyfin's own subtitle upload, as `<video>.<language>.srt`
    or `.ass` next to the video, and the plugin refreshes that one item.
 
@@ -59,9 +67,10 @@ No video leaves the server. Only the audio does, and only if you allow it.
 ### Cost and limits
 
 Each job records what OpenRouter and Retimer API report as its cost, and the page shows it. Two
-limits for a day, both in the settings, stop new jobs once they are reached: the number of
-subtitles (200 by default) and the cost (2 US dollars by default). The day ends at midnight UTC.
-"Get all missing" asks first and says what it will do.
+limits for a day, both in the settings, stop new jobs once they are reached: the number of jobs
+(200 by default) and the cost (2 US dollars by default). A job counts when it starts to work, so
+one that is cancelled while it waits does not. The day ends at midnight UTC. "Get all missing"
+asks first and says what it will do.
 
 ## How the pages work
 

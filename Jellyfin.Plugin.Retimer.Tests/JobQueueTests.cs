@@ -153,11 +153,22 @@ public sealed class JobQueueTests : IDisposable
         _w.Settings.Current.MaxCostPerDay = 0.05;
         _w.Model.CostPerCall = 0.03;
 
+        // The first job is held until the others wait behind it. Left to itself it can be through,
+        // and the day's limit spent, before they are queued, and then they are refused at the door.
+        var queued = new TaskCompletionSource();
+        var map = _w.Model.Tools["map_files"];
+        _w.Model.Tools["map_files"] = messages =>
+        {
+            queued.Task.Wait(Token);
+            return map(messages);
+        };
+
         foreach (var video in videos)
         {
-            _w.Queue.Enqueue(_w.JobFor(video));
+            Assert.Null(_w.Queue.Enqueue(_w.JobFor(video)).Refused);
         }
 
+        queued.SetResult();
         await _w.Queue.Idle.WaitAsync(TimeSpan.FromSeconds(20), Token);
 
         var states = _w.Queue.Since(0).OrderBy(e => e.Job.Created).Select(e => e.Job.State).ToList();

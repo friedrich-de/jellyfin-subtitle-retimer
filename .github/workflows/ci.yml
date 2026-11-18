@@ -1,9 +1,10 @@
 name: CI
 
+# Started by hand only. Whoever makes a change runs these checks themselves
+# before merging: dotnet build, dotnet test and dev/e2e.sh do all of it. Nothing
+# here starts on a push or a pull request, so no Actions minutes are used unless
+# someone asks for a run.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:

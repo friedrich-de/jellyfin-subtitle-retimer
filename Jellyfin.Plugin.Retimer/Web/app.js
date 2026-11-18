@@ -980,7 +980,7 @@
         function drawModels() {
             modelList.replaceChildren();
             if (models.length === 0) {
-                modelList.append(h('p', { class: 'muted', text: 'No model is in the list, so the plugin picks by ids and episode numbers.' }));
+                modelList.append(h('p', { class: 'muted', text: 'No model is in the list. The plugin needs one to pick files by itself.' }));
             }
             models.forEach(function (m) {
                 var inUse = m.Id === modelInUse;

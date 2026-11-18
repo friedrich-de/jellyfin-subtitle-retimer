@@ -24,7 +24,7 @@ public class RealJimakuTests(JellyfinServerWithRealJimaku server) : IClassFixtur
         var key = JellyfinServerWithRealJimaku.RealKey;
 
         // A wrong key first: Jimaku itself says no, and the plugin passes that on in words.
-        // No OpenRouter key is set, so the plugin picks by its rules.
+        // No OpenRouter key is set, so nothing picks: an administrator finds the show and the file by hand.
         await server.SaveSettingsAsync(new JsonObject { ["JimakuEnabled"] = true, ["JimakuApiKey"] = "e2e-wrong-key", ["RetimerEnabled"] = false });
         var rejected = JsonNode.Parse(await BodyAsync(await server.SendAsync(HttpMethod.Post, "Retimer/Test/jimaku", server.AdminToken)))!;
         Assert.Equal("Unauthorized", rejected["Status"]!.GetValue<string>());
@@ -37,6 +37,20 @@ public class RealJimakuTests(JellyfinServerWithRealJimaku server) : IClassFixtur
         var episode = server.Episodes[3];
         var entries = (await server.GetJsonAsync($"Retimer/Items/{episode}/Entries?query=Sousou%20no%20Frieren", server.AdminToken))!.AsArray();
         Assert.Contains(entries, entry => entry!["Name"]!.GetValue<string>().Contains("Frieren", StringComparison.OrdinalIgnoreCase));
+
+        // Without a model nobody has said which entry is the show's, so the picker lists nothing and says why.
+        var unpicked = (await server.GetJsonAsync($"Retimer/Items/{episode}/Files", server.AdminToken))!;
+        Assert.Contains("No AI model is set up", unpicked["ModelProblem"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Empty(unpicked["Files"]!.AsArray());
+
+        // The administrator says which entry it is, as "Wrong show?" on the page does.
+        var entry = entries.First(found => found!["Name"]!.GetValue<string>().Contains("Frieren", StringComparison.OrdinalIgnoreCase))!;
+        using var pinned = await server.SendAsync(
+            HttpMethod.Put,
+            $"Retimer/Items/{episode}/Entry",
+            server.AdminToken,
+            new JsonObject { ["Source"] = entry["Source"]!.GetValue<string>(), ["EntryId"] = entry["Id"]!.GetValue<string>() });
+        Assert.Equal(HttpStatusCode.NoContent, pinned.StatusCode);
 
         // The picker for an episode of the test library's show: the real entry and real files.
         var files = (await server.GetJsonAsync($"Retimer/Items/{episode}/Files", server.AdminToken))!;

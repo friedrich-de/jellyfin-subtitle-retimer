@@ -48,6 +48,21 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     public const string UserStylesResource = "Jellyfin.Plugin.Retimer.Web.app.css";
 
     /// <summary>
+    /// The embedded resource that holds the page's web app manifest, which lets a browser install the page as an app.
+    /// </summary>
+    public const string UserManifestResource = "Jellyfin.Plugin.Retimer.Web.manifest.webmanifest";
+
+    /// <summary>
+    /// The embedded resource that holds the page's service worker.
+    /// </summary>
+    public const string UserWorkerResource = "Jellyfin.Plugin.Retimer.Web.sw.js";
+
+    /// <summary>
+    /// The start of the names of the embedded resources that hold the page's icons; the file name follows.
+    /// </summary>
+    public const string IconResourcePrefix = "Jellyfin.Plugin.Retimer.Web.icons.";
+
+    /// <summary>
     /// The plugin's fixed id.
     /// </summary>
     public static readonly Guid PluginId = Guid.Parse("e9fdba44-78af-4384-bb85-6df44aa841d8");

@@ -22,6 +22,10 @@
     <EmbeddedResource Include="Web\index.html" />
     <EmbeddedResource Include="Web\app.js" />
     <EmbeddedResource Include="Web\app.css" />
+    <EmbeddedResource Include="Web\manifest.webmanifest" />
+    <EmbeddedResource Include="Web\sw.js" />
+    <!-- The served icons only; the SVG files they are drawn from (dev/render-icons.js) stay out. -->
+    <EmbeddedResource Include="Web\icons\*.png;Web\icons\favicon.svg" LogicalName="Jellyfin.Plugin.Retimer.Web.icons.%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

@@ -17,7 +17,11 @@ public class AccessTests
 {
     private static readonly string[] _knownControllers = [nameof(RetimerController), nameof(RetimerSettingsController)];
 
-    private static readonly string[] _openActions = ["RetimerController.GetScript", "RetimerController.GetStyles", "RetimerController.GetUserPage"];
+    private static readonly string[] _openActions =
+    [
+        "RetimerController.GetIcon", "RetimerController.GetManifest", "RetimerController.GetScript",
+        "RetimerController.GetStyles", "RetimerController.GetUserPage", "RetimerController.GetWorker"
+    ];
 
     private static readonly Type[] _controllers = typeof(Plugin).Assembly.GetTypes()
         .Where(type => typeof(ControllerBase).IsAssignableFrom(type) && !type.IsAbstract)
@@ -30,7 +34,7 @@ public class AccessTests
     }
 
     [Fact]
-    public void Only_the_page_and_its_two_files_answer_without_a_login()
+    public void Only_the_page_and_its_files_answer_without_a_login()
     {
         foreach (var controller in _controllers)
         {

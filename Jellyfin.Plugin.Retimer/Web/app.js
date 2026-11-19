@@ -19,12 +19,31 @@
     var leave = null;       // The open screen's clean-up.
     var routeToken = 0;     // Grows with every navigation, so a late answer of an old screen is dropped.
 
-    document.getElementById('homeLink').href = base + '/web/';
+    // Installed as an app, the page keeps its own window: Jellyfin opens in the browser instead.
+    var installed = !!window.matchMedia && !window.matchMedia('(display-mode: browser)').matches;
+
+    var homeLink = document.getElementById('homeLink');
+    homeLink.href = base + '/web/';
+    toBrowser(homeLink);
+
+    // The service worker lets the browser offer to install the page as an app. It keeps the page's own
+    // files only, never an answer of the server. The page works the same without it.
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('Retimer/sw.js', { scope: 'Retimer' }).catch(function () { });
+    }
 
     // ---------------------------------------------------------------- small helpers
 
     function pageBase(path) {
         return path.replace(/\/Retimer\/?$/i, '').replace(/^[\/\\]+/, '/').replace(/\/+$/, '');
+    }
+
+    function toBrowser(link) {
+        if (installed) {
+            link.target = '_blank';
+            link.rel = 'noopener';
+        }
+        return link;
     }
 
     function h(tag, props) {
@@ -1245,8 +1264,9 @@
             token = null;
             show(h('div', { class: 'pad' },
                 h('h1', { text: 'Sign in first' }),
-                h('p', { class: 'muted', text: 'Sign in to Jellyfin in this browser, then open this page again.' }),
-                h('p', {}, h('a', { class: 'button primary', href: base + '/web/', text: 'Open Jellyfin' }))));
+                h('p', { class: 'muted', text: 'Sign in to Jellyfin in this browser. The page goes on by itself once you have.' }),
+                h('p', {}, toBrowser(h('a', { class: 'button primary', href: base + '/web/', text: 'Open Jellyfin' })))));
+            waitForLogin();
             return;
         }
 
@@ -1265,6 +1285,18 @@
             });
         }).catch(function () {
             show(h('p', { class: 'pad bad', text: 'The server could not be reached.' }));
+        });
+    }
+
+    // Jellyfin writes the login into this browser's storage when someone signs in, in any tab or window,
+    // the installed app's included. The page then signs in with it without being opened again.
+    function waitForLogin() {
+        window.addEventListener('storage', function heard(event) {
+            if (event.key !== null && event.key !== 'jellyfin_credentials') { return; }
+            var tokens = readTokens();
+            if (tokens.length === 0) { return; }
+            window.removeEventListener('storage', heard);
+            signIn(tokens);
         });
     }
 

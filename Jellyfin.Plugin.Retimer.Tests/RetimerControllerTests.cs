@@ -1,8 +1,10 @@
 using System;
+using System.Buffers.Binary;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.Retimer.Api;
@@ -92,6 +94,101 @@ public sealed class RetimerControllerTests : IDisposable
     }
 
     [Fact]
+    public void The_page_can_be_installed_as_an_app()
+    {
+        var controller = Controller();
+        var page = Read(controller.GetUserPage(), "text/html; charset=utf-8");
+        var policy = controller.Response.Headers.ContentSecurityPolicy.ToString();
+
+        Assert.Contains("<link rel=\"manifest\" href=\"Retimer/manifest.webmanifest\">", page, StringComparison.Ordinal);
+        Assert.Contains("<link rel=\"icon\" href=\"Retimer/icons/favicon.svg\" type=\"image/svg+xml\">", page, StringComparison.Ordinal);
+        Assert.Contains("href=\"Retimer/icons/favicon-32.png\"", page, StringComparison.Ordinal);
+        Assert.Contains("<link rel=\"apple-touch-icon\" href=\"Retimer/icons/apple-touch-icon.png\">", page, StringComparison.Ordinal);
+        Assert.Contains("manifest-src 'self'", policy, StringComparison.Ordinal);
+        Assert.Contains("worker-src 'self'", policy, StringComparison.Ordinal);
+
+        // The addresses are relative to the manifest at <base>/Retimer/manifest.webmanifest, so they hold under a base path.
+        using var manifest = JsonDocument.Parse(Read(Controller().GetManifest(), "application/manifest+json; charset=utf-8"));
+        var root = manifest.RootElement;
+        Assert.Equal("Subtitle Retimer", root.GetProperty("name").GetString());
+        Assert.Equal("../Retimer", root.GetProperty("start_url").GetString());
+        Assert.Equal("../Retimer", root.GetProperty("scope").GetString());
+        Assert.Equal("standalone", root.GetProperty("display").GetString());
+
+        // Every icon the manifest names is served, and is the size it claims. Browsers want 192 and 512 pixels.
+        var icons = root.GetProperty("icons").EnumerateArray().ToList();
+        foreach (var icon in icons)
+        {
+            var src = icon.GetProperty("src").GetString()!;
+            Assert.StartsWith("icons/", src, StringComparison.Ordinal);
+            var bytes = ReadBytes(Controller().GetIcon(src["icons/".Length..]), "image/png");
+            var size = icon.GetProperty("sizes").GetString();
+            Assert.Equal(size, PngWidth(bytes) + "x" + PngHeight(bytes));
+        }
+
+        foreach (var (size, purpose) in new[] { ("192x192", "any"), ("512x512", "any"), ("512x512", "maskable") })
+        {
+            Assert.Contains(icons, icon => icon.GetProperty("sizes").GetString() == size && icon.GetProperty("purpose").GetString() == purpose);
+        }
+
+        Assert.Equal(180, PngWidth(ReadBytes(Controller().GetIcon("apple-touch-icon.png"), "image/png")));
+        Assert.Equal(32, PngWidth(ReadBytes(Controller().GetIcon("favicon-32.png"), "image/png")));
+        Assert.Contains("<svg", Read(Controller().GetIcon("favicon.svg"), "image/svg+xml"), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Only_the_listed_icons_are_served()
+    {
+        foreach (var name in RetimerController.Icons.Keys)
+        {
+            Assert.IsType<FileStreamResult>(Controller().GetIcon(name));
+        }
+
+        // The SVG files the icons are drawn from are not served, and the name is never a path.
+        foreach (var name in new[] { "icon.svg", "icon-maskable.svg", "ICON-192.PNG", "../app.js", "..%2Fapp.js", "app.js", string.Empty })
+        {
+            Assert.IsType<NotFoundResult>(Controller().GetIcon(name));
+        }
+    }
+
+    [Fact]
+    public void The_service_worker_looks_after_the_page_and_keeps_only_its_files()
+    {
+        var controller = Controller();
+        var worker = Read(controller.GetWorker(), "text/javascript; charset=utf-8");
+
+        // The script lies one level below the page it looks after, which the browser allows only with this header.
+        Assert.Equal("../Retimer", controller.Response.Headers["Service-Worker-Allowed"].ToString());
+        Assert.Contains("register('Retimer/sw.js', { scope: 'Retimer' })", Read(Controller().GetScript(), "text/javascript; charset=utf-8"), StringComparison.Ordinal);
+
+        // It keeps the page's own files, which every caller may fetch anyway, and no answer of the server.
+        var list = Regex.Match(worker, @"var FILES = \[(.*?)\]", RegexOptions.Singleline);
+        Assert.True(list.Success);
+        var files = Regex.Matches(list.Groups[1].Value, "'([^']*)'").Select(m => m.Groups[1].Value).ToList();
+        Assert.Equal(["../Retimer", "app.js", "app.css", "manifest.webmanifest", "icons/favicon.svg", "icons/favicon-32.png"], files);
+        Assert.All(files.Where(file => file.StartsWith("icons/", StringComparison.Ordinal)), file => Assert.Contains(file["icons/".Length..], RetimerController.Icons.Keys));
+        Assert.DoesNotContain("Authorization", worker, StringComparison.Ordinal);
+        Assert.DoesNotContain("innerHTML", worker, StringComparison.Ordinal);
+        Assert.DoesNotContain("eval(", worker, StringComparison.Ordinal);
+    }
+
+    private static byte[] ReadBytes(ActionResult result, string expectedType)
+    {
+        var file = Assert.IsType<FileStreamResult>(result);
+        Assert.Equal(expectedType, file.ContentType);
+        using var copy = new MemoryStream();
+        file.FileStream.CopyTo(copy);
+        var bytes = copy.ToArray();
+        Assert.True(bytes.Length > 24);
+        Assert.Equal([0x89, (byte)'P', (byte)'N', (byte)'G'], bytes[..4]);
+        return bytes;
+    }
+
+    private static int PngWidth(byte[] png) => BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(16, 4));
+
+    private static int PngHeight(byte[] png) => BinaryPrimitives.ReadInt32BigEndian(png.AsSpan(20, 4));
+
+    [Fact]
     public void The_page_needs_no_inline_script_or_style_so_the_policy_can_stay_strict()
     {
         var page = Read(Controller().GetUserPage(), "text/html; charset=utf-8");
@@ -122,7 +219,7 @@ public sealed class RetimerControllerTests : IDisposable
             .Order()
             .ToList();
 
-        Assert.Equal(["GetScript", "GetStyles", "GetUserPage"], open);
+        Assert.Equal(["GetIcon", "GetManifest", "GetScript", "GetStyles", "GetUserPage", "GetWorker"], open);
     }
 
     [Fact]

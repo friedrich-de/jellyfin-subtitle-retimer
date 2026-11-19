@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Subtitle Retimer: a stopwatch over two subtitle lines, in the Jellyfin web client's blue. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#00a4dc"/>
+      <stop offset="1" stop-color="#00698f"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <g id="mark">
+    <rect x="222" y="58" width="68" height="30" rx="12" fill="#fff"/>
+    <rect x="243" y="80" width="26" height="26" fill="#fff"/>
+    <g fill="none" stroke="#fff" stroke-width="30" stroke-linecap="round">
+      <circle cx="256" cy="211" r="96"/>
+      <path d="M256 211 L302 165"/>
+    </g>
+    <circle cx="256" cy="211" r="20" fill="#fff"/>
+    <rect x="96" y="356" width="320" height="40" rx="20" fill="#fff"/>
+    <rect x="152" y="414" width="208" height="40" rx="20" fill="#fff" fill-opacity=".72"/>
+  </g>
+</svg>

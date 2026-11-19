@@ -8,6 +8,14 @@
     "category": "Subtitles",
     "versions": [
       {
+        "version": "0.5.0.0",
+        "changelog": "The page can be installed as an app.\n\n- Chrome, Edge and other browsers built on Chromium offer to install the page at /Retimer as an app. It opens in its own window with its own icon. Installing needs the page to be opened over HTTPS, or at localhost.\n- The page has an icon of its own in the browser tab: a stopwatch over two subtitle lines.\n- The installed app opens Jellyfin in the browser, and goes on by itself once you sign in to Jellyfin there.\n- A service worker keeps a copy of the page's own files, so the app still opens and says so when the server cannot be reached. It never keeps an answer of the server.",
+        "targetAbi": "12.4.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/friedrich-de/jellyfin-plugin-retimer/main/repository/subtitle-retimer_0.5.0.0.zip",
+        "checksum": "e217dee6f16d8eade1651d2dacf33363",
+        "timestamp": "2026-11-19T23:10:00Z"
+      },
+      {
         "version": "0.4.1.0",
         "changelog": "Keys are stored encrypted.\n\n- The API keys and the OpenSubtitles password are encrypted in the plugin's settings file and read back only for the call that sends them. The secret that encrypts them is a file of its own in Jellyfin's data folder (`data/subtitle-retimer/settings.key`), readable only by the user Jellyfin runs as. Keys stored in plain by 0.4.0.0 are encrypted at the first start.\n- Settings copied from another server lose their keys, because only the server that encrypted them can read them: enter them again on the settings screen. The same goes for a step back to 0.4.0.0.\n- The page keeps every call on its own server, whatever address it was opened under, and OpenSubtitles may only move the login to one of its own hosts.",
         "targetAbi": "12.4.0.0",

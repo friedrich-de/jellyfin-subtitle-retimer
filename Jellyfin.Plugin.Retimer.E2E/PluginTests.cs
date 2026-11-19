@@ -109,12 +109,39 @@ public class PluginTests(JellyfinServer server) : IClassFixture<JellyfinServer>
         Assert.DoesNotContain("unsafe-inline", policy, StringComparison.Ordinal);
         Assert.DoesNotContain("<script>", html, StringComparison.OrdinalIgnoreCase);
 
-        foreach (var (path, type, marker) in new[] { ("Retimer/app.js", "text/javascript", "'use strict'"), ("Retimer/app.css", "text/css", "--primary") })
+        foreach (var (path, type, marker) in new[]
+        {
+            ("Retimer/app.js", "text/javascript", "'use strict'"),
+            ("Retimer/app.css", "text/css", "--primary"),
+            ("Retimer/manifest.webmanifest", "application/manifest+json", "\"start_url\": \"../Retimer\""),
+            ("Retimer/sw.js", "text/javascript", "'use strict'"),
+            ("Retimer/icons/favicon.svg", "image/svg+xml", "<svg"),
+        })
         {
             using var file = await server.SendAsync(HttpMethod.Get, path);
             Assert.Equal(HttpStatusCode.OK, file.StatusCode);
             Assert.Equal(type, file.Content.Headers.ContentType!.MediaType);
             Assert.Contains(marker, await BodyAsync(file), StringComparison.Ordinal);
+        }
+
+        // The page can be installed as an app: its service worker may look after the page one level up,
+        // and its icons are there. A name that is not one of the icons is not found.
+        using (var worker = await server.SendAsync(HttpMethod.Get, "Retimer/sw.js"))
+        {
+            Assert.Equal("../Retimer", Assert.Single(worker.Headers.GetValues("Service-Worker-Allowed")));
+        }
+
+        foreach (var icon in new[] { "icon-192.png", "icon-512.png", "icon-maskable-512.png", "apple-touch-icon.png", "favicon-32.png" })
+        {
+            using var file = await server.SendAsync(HttpMethod.Get, "Retimer/icons/" + icon);
+            Assert.Equal(HttpStatusCode.OK, file.StatusCode);
+            Assert.Equal("image/png", file.Content.Headers.ContentType!.MediaType);
+        }
+
+        foreach (var missing in new[] { "Retimer/icons/icon.svg", "Retimer/icons/app.js", "Retimer/icons/..%2Fapp.js" })
+        {
+            using var file = await server.SendAsync(HttpMethod.Get, missing);
+            Assert.Equal(HttpStatusCode.NotFound, file.StatusCode);
         }
 
         // With a slash at the end the page's relative links would break, so it sends the browser on.

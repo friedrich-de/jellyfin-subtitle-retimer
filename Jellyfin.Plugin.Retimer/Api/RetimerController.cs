@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Frozen;
+using System.Collections.Generic;
 using System.Net.Mime;
 using System.Threading;
 using System.Threading.Tasks;
@@ -21,11 +23,27 @@ namespace Jellyfin.Plugin.Retimer.Api;
 public class RetimerController : ControllerBase
 {
     /// <summary>
-    /// What the page may do: run its own script and styles, show pictures from this server, and call this server.
+    /// What the page may do: run its own script and styles, show pictures from this server, call this server,
+    /// and read its own app manifest and service worker so the browser can install it as an app.
     /// </summary>
     internal const string UserPageContentSecurityPolicy =
         "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; "
+        + "manifest-src 'self'; worker-src 'self'; "
         + "frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+
+    /// <summary>
+    /// The page's icons by file name, with their type. Nothing else is served under <c>icons/</c>.
+    /// </summary>
+    internal static readonly FrozenDictionary<string, string> Icons = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["favicon.svg"] = "image/svg+xml",
+        ["favicon-32.png"] = "image/png",
+        ["apple-touch-icon.png"] = "image/png",
+        ["icon-192.png"] = "image/png",
+        ["icon-512.png"] = "image/png",
+        ["icon-maskable-192.png"] = "image/png",
+        ["icon-maskable-512.png"] = "image/png",
+    }.ToFrozenDictionary(StringComparer.Ordinal);
 
     private readonly PluginServices _services;
 
@@ -80,6 +98,46 @@ public class RetimerController : ControllerBase
     [Produces("text/css")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     public ActionResult GetStyles() => Resource(Plugin.UserStylesResource, "text/css; charset=utf-8");
+
+    /// <summary>
+    /// Serves the page's web app manifest: its name, colours and icons, so a browser can install it as an app.
+    /// </summary>
+    /// <returns>The manifest.</returns>
+    [HttpGet("manifest.webmanifest")]
+    [AllowAnonymous]
+    [Produces("application/manifest+json")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public ActionResult GetManifest() => Resource(Plugin.UserManifestResource, "application/manifest+json; charset=utf-8");
+
+    /// <summary>
+    /// Serves the page's service worker. It keeps a copy of the page and its files, which are the same for
+    /// everyone, and leaves every other request alone.
+    /// </summary>
+    /// <returns>The service worker's script.</returns>
+    [HttpGet("sw.js")]
+    [AllowAnonymous]
+    [Produces("text/javascript")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public ActionResult GetWorker()
+    {
+        // The script sits at <base>/Retimer/sw.js but looks after the page at <base>/Retimer, one level up.
+        // The browser allows that only when the script says so. The address is relative to the script,
+        // so it holds behind a reverse proxy with a base path too.
+        Response.Headers["Service-Worker-Allowed"] = "../Retimer";
+        return Resource(Plugin.UserWorkerResource, "text/javascript; charset=utf-8");
+    }
+
+    /// <summary>
+    /// Serves one of the page's icons: the browser tab's icon, and the app's icons once it is installed.
+    /// </summary>
+    /// <param name="name">The icon's file name.</param>
+    /// <returns>The icon, or 404 for a name that is not one of them.</returns>
+    [HttpGet("icons/{name}")]
+    [AllowAnonymous]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public ActionResult GetIcon([FromRoute] string name)
+        => Icons.TryGetValue(name, out var type) ? Resource(Plugin.IconResourcePrefix + name, type) : NotFound();
 
     /// <summary>
     /// Says who is signed in, what they may do and what is set up, without any key.

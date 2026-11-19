@@ -103,8 +103,29 @@ asks first and says what it will do.
 Jellyfin's web client shows a plugin's own pages only to administrators. So the plugin serves its
 page itself at `/Retimer`. The page has no login of its own: it reuses the login that Jellyfin's
 web client keeps in the browser for the same address, and calls the plugin's endpoints with it.
-Without a login it shows a link to Jellyfin. The page is served with a Content-Security-Policy that
-allows only its own script, styles and images, and nothing is written into it on the server.
+Without a login it shows a link to Jellyfin, and goes on by itself once you sign in there. The page
+is served with a Content-Security-Policy that allows only its own script, styles, images, app
+manifest and service worker, and nothing is written into it on the server.
+
+### Install the page as an app
+
+Chrome, Edge and other browsers built on Chromium can install the page as an app, on the computer
+and on Android: open `https://<your Jellyfin>/Retimer` and choose "Install" in the address bar or
+in the browser's menu. Browsers install only pages opened over HTTPS or at `localhost`, so a
+Jellyfin reached as `http://<address on your network>` is not offered. Firefox on the computer
+does not install pages. Safari on iPhone and iPad can add the page to the home screen, which has
+not been tried yet.
+
+The app opens in its own window with the plugin's icon. It shares the browser's login: sign in to
+Jellyfin in the browser and the app is signed in too, without being opened again. "Back to
+Jellyfin" opens Jellyfin in the browser.
+
+The page brings a web app manifest (`/Retimer/manifest.webmanifest`), its icons
+(`/Retimer/icons/`) and a service worker (`/Retimer/sw.js`). Like the page itself, these answer
+without a login and hold no data. The service worker keeps a copy of the page and its files only,
+so the app still opens, and says that the server cannot be reached, while it is offline; every
+other request goes to the server and is never stored. The icons are drawn from the SVG files in
+`Jellyfin.Plugin.Retimer/Web/icons/`; after changing one, run `node dev/render-icons.js`.
 
 The plugin's entry in the dashboard (Dashboard → Plugins → Subtitle Retimer) links to the page
 and to its settings. To put the page in the side menu for everyone, an administrator can add it to
@@ -114,7 +135,7 @@ and to its settings. To put the page in the side menu for everyone, an administr
 
 | | Without login | Signed-in user | May manage subtitles | Administrator |
 | --- | --- | --- | --- | --- |
-| The page and its files (no data in them) | yes | yes | yes | yes |
+| The page and its files, app manifest, icons and service worker (no data in them) | yes | yes | yes | yes |
 | See shows, episodes, states and jobs of what Jellyfin lets them see | no | yes | yes | yes |
 | Get, choose, retime or remove a subtitle, set a show's language | no | no | yes | yes |
 | See today's use and what a job cost | no | no | yes | yes |
@@ -211,7 +232,7 @@ built against. A plugin built for 12.4 does not load on Jellyfin 10.11, which ru
 | `Jellyfin.Plugin.Retimer/` | The plugin: `Configuration/` (settings), `Sources/` and `Jimaku/` (subtitle sources), `Picking/` (model, rules, language check), `Retimer/` (Retimer API client), `Library/` (what the plugin reads from and writes to Jellyfin), `Jobs/` (the job, the queue, what is remembered), `Api/` (endpoints), `Web/` (the page) |
 | `Jellyfin.Plugin.Retimer.Tests/` | Unit tests. Nothing in them leaves the process. |
 | `Jellyfin.Plugin.Retimer.E2E/` | End-to-end tests against a real server |
-| `dev/` | `package.sh`, `e2e.sh` |
+| `dev/` | `package.sh`, `e2e.sh`, `render-icons.js` (the page's PNG icons from their SVG files) |
 | `repository/` | The public plugin repository: `manifest.json` and the zip of each released version |
 
 ## Licence

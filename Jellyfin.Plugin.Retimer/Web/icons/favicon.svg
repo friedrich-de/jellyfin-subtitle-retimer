@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- The mark drawn bolder and larger, so it still reads at 16 pixels in a browser tab. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#00a4dc"/>
+      <stop offset="1" stop-color="#00698f"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <rect x="212" y="28" width="88" height="44" rx="14" fill="#fff"/>
+  <g fill="none" stroke="#fff" stroke-width="48" stroke-linecap="round">
+    <circle cx="256" cy="196" r="106"/>
+    <path d="M256 196 L312 140"/>
+  </g>
+  <rect x="56" y="360" width="400" height="56" rx="28" fill="#fff"/>
+  <rect x="136" y="436" width="240" height="48" rx="24" fill="#fff" fill-opacity=".72"/>
+</svg>

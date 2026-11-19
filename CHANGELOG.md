@@ -3,6 +3,15 @@
 Each section is the changelog Jellyfin shows for that version: `dev/package.sh --publish`
 copies it into the repository manifest.
 
+## 0.5.0.0
+
+The page can be installed as an app.
+
+- Chrome, Edge and other browsers built on Chromium offer to install the page at /Retimer as an app. It opens in its own window with its own icon. Installing needs the page to be opened over HTTPS, or at localhost.
+- The page has an icon of its own in the browser tab: a stopwatch over two subtitle lines.
+- The installed app opens Jellyfin in the browser, and goes on by itself once you sign in to Jellyfin there.
+- A service worker keeps a copy of the page's own files, so the app still opens and says so when the server cannot be reached. It never keeps an answer of the server.
+
 ## 0.4.1.0
 
 Keys are stored encrypted.

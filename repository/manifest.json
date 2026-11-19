@@ -1,0 +1,20 @@
+[
+  {
+    "guid": "e9fdba44-78af-4384-bb85-6df44aa841d8",
+    "name": "Subtitle Retimer",
+    "overview": "Finds subtitles for your shows and films and fixes their timing.",
+    "description": "A page that lists your shows and gets a subtitle for an episode from Jimaku or OpenSubtitles. A model picks the file, and your own Retimer API server can retime it against the video's own subtitle tracks or its audio. The subtitle is saved next to the video and Jellyfin lists it at once.",
+    "owner": "friedrich-de",
+    "category": "Subtitles",
+    "versions": [
+      {
+        "version": "0.4.0.0",
+        "changelog": "The first public release, for Jellyfin 12.4.\n\n- A page at /Retimer for every signed-in user: your shows with their posters, a show's episodes with their subtitle state, a file picker, the activity of jobs, and settings for administrators.\n- Gets subtitles from Jimaku and OpenSubtitles. A model through OpenRouter (Haiku 5.5 by default, with your key) picks the entry, matches files to episodes and checks the language.\n- Retimes the subtitle with your own Retimer API server against the video's subtitle tracks or its audio, and can read picture subtitles (PGS) into text.\n- Saves the subtitle next to the video, and Jellyfin lists it at once.\n- Daily limits on jobs and cost.",
+        "targetAbi": "12.4.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/friedrich-de/jellyfin-plugin-retimer/main/repository/subtitle-retimer_0.4.0.0.zip",
+        "checksum": "6e67fd749fb8ad9b1a35d74988b7b711",
+        "timestamp": "2026-11-19T11:09:53Z"
+      }
+    ]
+  }
+]

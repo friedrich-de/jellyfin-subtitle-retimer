@@ -9,6 +9,29 @@ video. Jellyfin lists the new subtitle at once, without a library scan.
 
 It builds for **Jellyfin 12.4** (.NET 10) and installs through Jellyfin's own plugin installer.
 
+## Install
+
+1. In Jellyfin, open Dashboard → Plugins → Manage Repositories and add a new repository: the name
+   `Subtitle Retimer` and this URL.
+
+   ```
+   https://raw.githubusercontent.com/friedrich-de/jellyfin-plugin-retimer/main/repository/manifest.json
+   ```
+
+2. Install **Subtitle Retimer** from the list of plugins (category Subtitles) and restart Jellyfin.
+3. Open `http://<your Jellyfin>/Retimer`, then Settings, and put in the keys below.
+
+### What you need
+
+| | What for | |
+| --- | --- | --- |
+| [OpenRouter](https://openrouter.ai) key | The model that picks the file for an episode and checks its language. Well under a cent per subtitle with Haiku 5.5. | Required |
+| [Jimaku](https://jimaku.cc) key | Japanese subtitles for anime and dramas. Free, from your Jimaku account page. | One source at least |
+| [OpenSubtitles](https://www.opensubtitles.com) key | Subtitles in many languages. | One source at least |
+| A [retimer-api](https://github.com/friedrich-de/retimer-api) server | Fixes the timing of a downloaded subtitle. You run it yourself, with Docker next to Jellyfin; its README has the steps. | Optional |
+
+Without Retimer API the plugin still finds, checks and saves subtitles; it just does not retime them.
+
 ## What it does
 
 | Part | What it does |
@@ -50,9 +73,9 @@ It builds for **Jellyfin 12.4** (.NET 10) and installs through Jellyfin's own pl
 5. **Save.** The subtitle goes through Jellyfin's own subtitle upload, as `<video>.<language>.srt`
    or `.ass` next to the video, and the plugin refreshes that one item.
 
-Retimer API is a separate service: the hosted one, or your own
-[retimer-api](https://github.com/friedrich-de/retimer-api) server. Both take the same calls. It is
-**off until you switch it on**; without it a subtitle is saved as downloaded.
+Retimer API is a separate service that you run yourself:
+[retimer-api](https://github.com/friedrich-de/retimer-api), on the Jellyfin machine or another one.
+It is **off until you switch it on**; without it a subtitle is saved as downloaded.
 
 The subtitle language is one setting for the server, and each show can use another one, set on the
 show's page.
@@ -150,16 +173,28 @@ One more end-to-end test searches the real jimaku.cc. It runs only when `JIMAKU_
 The script builds everything before the tests and keeps the key away from the build, because the
 compiler's helper process can outlive a build together with its environment.
 
-## Package and install
+## Package and publish
 
 ```sh
-dev/package.sh [BASE_URL]
+dev/package.sh [BASE_URL]      # a test repository in dist/
+dev/package.sh --publish       # this version added to the public repository in repository/
 ```
 
-writes `dist/subtitle-retimer_<version>.zip` and `dist/manifest.json`, a Jellyfin plugin
-repository with that one plugin. Serve `dist/` at `BASE_URL` (default `http://127.0.0.1:8765`),
-add `BASE_URL/manifest.json` under Dashboard → Plugins → Repositories, install "Subtitle Retimer"
-from the catalog and restart Jellyfin. There is no public repository address yet.
+`dev/package.sh` writes `dist/subtitle-retimer_<version>.zip` and `dist/manifest.json`, a Jellyfin
+plugin repository with that one build. Serve `dist/` at `BASE_URL` (default
+`http://127.0.0.1:8765`), add `BASE_URL/manifest.json` as a repository in Jellyfin, install
+"Subtitle Retimer" from the catalog and restart Jellyfin. `dev/e2e.sh` does the same with a
+throwaway server.
+
+`dev/package.sh --publish` releases a version. It builds the zip into `repository/`, and adds the
+version to `repository/manifest.json` with its section of [CHANGELOG.md](CHANGELOG.md) as the
+changelog, keeping the versions before it. Jellyfin reads that manifest from the main branch on
+GitHub, so the version is out once the commit that adds it is merged. A version that is in the
+manifest already is refused: raise `<Version>` first. To release:
+
+1. Raise `<Version>` in `Directory.Build.props` and add its section to `CHANGELOG.md`.
+2. Run `dotnet build`, `dotnet test` and `dev/e2e.sh`.
+3. Run `dev/package.sh --publish`, commit `repository/` and merge it.
 
 The version lives in `Directory.Build.props`, together with the Jellyfin version the plugin is
 built against. A plugin built for 12.4 does not load on Jellyfin 10.11, which runs on .NET 9.
@@ -172,6 +207,7 @@ built against. A plugin built for 12.4 does not load on Jellyfin 10.11, which ru
 | `Jellyfin.Plugin.Retimer.Tests/` | Unit tests. Nothing in them leaves the process. |
 | `Jellyfin.Plugin.Retimer.E2E/` | End-to-end tests against a real server |
 | `dev/` | `package.sh`, `e2e.sh` |
+| `repository/` | The public plugin repository: `manifest.json` and the zip of each released version |
 
 ## Licence
 

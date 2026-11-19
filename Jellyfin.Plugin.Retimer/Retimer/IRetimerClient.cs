@@ -4,7 +4,7 @@ using System.Threading.Tasks;
 namespace Jellyfin.Plugin.Retimer.Retimer;
 
 /// <summary>
-/// Talks to the retimer: the hosted service or a self-hosted retimer-api, which share one HTTP contract.
+/// Talks to a retimer-api server over its HTTP contract.
 /// </summary>
 public interface IRetimerClient
 {

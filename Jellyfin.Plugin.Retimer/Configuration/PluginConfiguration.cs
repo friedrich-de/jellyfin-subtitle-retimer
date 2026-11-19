@@ -67,7 +67,7 @@ public class PluginConfiguration : BasePluginConfiguration
     public bool RetimerEnabled { get; set; }
 
     /// <summary>
-    /// Gets or sets the address of Retimer API: the hosted service or a self-hosted retimer-api.
+    /// Gets or sets the address of a retimer-api server.
     /// </summary>
     public string RetimerUrl { get; set; } = string.Empty;
 

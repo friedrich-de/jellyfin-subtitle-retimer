@@ -1066,7 +1066,7 @@
             var addError = h('span', { class: 'bad small', role: 'alert' });
 
             fields.OpenSubtitlesUsername = h('input', { type: 'text', value: s.OpenSubtitlesUsername, autocomplete: 'off', spellcheck: 'false' });
-            fields.RetimerUrl = h('input', { type: 'url', value: s.RetimerUrl, placeholder: 'https://retimer.example.org', spellcheck: 'false' });
+            fields.RetimerUrl = h('input', { type: 'url', value: s.RetimerUrl, placeholder: 'http://192.168.1.10:8000', spellcheck: 'false' });
             fields.MaxJobsPerDay = h('input', { type: 'number', min: '0', step: '1', value: String(s.MaxJobsPerDay) });
             fields.MaxCostPerDay = h('input', { type: 'number', min: '0', step: '0.5', value: String(s.MaxCostPerDay) });
 
@@ -1107,10 +1107,10 @@
 
                 h('section', { class: 'panel' },
                     h('h2', { text: 'Retimer API' }),
-                    h('p', { class: 'hint', text: 'A separate service that compares a subtitle with the video\'s own subtitle tracks, or with its audio, and fixes its timing. It is off until you switch it on.' }),
+                    h('p', { class: 'hint', text: 'A separate service that you run yourself. It compares a subtitle with the video\'s own subtitle tracks, or with its audio, and fixes its timing. It is off until you switch it on.' }),
                     retimerSwitch, retimerHint,
                     h('p', {}, h('a', { href: s.RetimerProjectUrl, target: '_blank', rel: 'noopener noreferrer', text: 'What is Retimer API? See it on GitHub' })),
-                    field('Retimer API address', fields.RetimerUrl, 'The hosted Retimer API, or your own server that runs it. Both take the same calls.'),
+                    field('Retimer API address', fields.RetimerUrl, 'Where your Retimer API server is, such as http://192.168.1.10:8000, or http://retimer-api:8000 from a container on the same Docker network.'),
                     secret('RetimerApiKey', 'Retimer API key', s.HasRetimerApiKey, 'The key for that address.'),
                     tester('retimer', 'Check Retimer API'),
                     h('h3', { text: 'What Retimer API compares a subtitle with' }),

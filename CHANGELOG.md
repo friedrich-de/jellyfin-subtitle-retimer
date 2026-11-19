@@ -3,6 +3,14 @@
 Each section is the changelog Jellyfin shows for that version: `dev/package.sh --publish`
 copies it into the repository manifest.
 
+## 0.4.1.0
+
+Keys are stored encrypted.
+
+- The API keys and the OpenSubtitles password are encrypted in the plugin's settings file and read back only for the call that sends them. The secret that encrypts them is a file of its own in Jellyfin's data folder (`data/subtitle-retimer/settings.key`), readable only by the user Jellyfin runs as. Keys stored in plain by 0.4.0.0 are encrypted at the first start.
+- Settings copied from another server lose their keys, because only the server that encrypted them can read them: enter them again on the settings screen. The same goes for a step back to 0.4.0.0.
+- The page keeps every call on its own server, whatever address it was opened under, and OpenSubtitles may only move the login to one of its own hosts.
+
 ## 0.4.0.0
 
 The first public release, for Jellyfin 12.4.

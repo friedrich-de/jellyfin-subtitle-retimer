@@ -124,19 +124,32 @@ public class PluginTests(JellyfinServer server) : IClassFixture<JellyfinServer>
         Assert.Equal(HttpStatusCode.Found, slash.StatusCode);
         Assert.Equal("../Retimer", slash.Headers.Location!.OriginalString);
 
+        // Every other endpoint of the plugin, and Jellyfin's own calls for the plugin's settings.
+        var library = Guid.NewGuid().ToString();
         foreach (var (method, path) in new[]
         {
             (HttpMethod.Get, "Retimer/Status"),
             (HttpMethod.Get, "Retimer/Libraries"),
+            (HttpMethod.Get, $"Retimer/Libraries/{library}/Shows"),
             (HttpMethod.Get, "Retimer/Shows/" + server.ShowId),
+            (HttpMethod.Put, $"Retimer/Shows/{server.ShowId}/Language"),
             (HttpMethod.Get, "Retimer/Jobs"),
             (HttpMethod.Post, "Retimer/Jobs"),
             (HttpMethod.Delete, "Retimer/Jobs"),
+            (HttpMethod.Delete, "Retimer/Jobs/some-job"),
+            (HttpMethod.Post, "Retimer/Jobs/some-job/Retry"),
             (HttpMethod.Get, $"Retimer/Items/{server.Episodes[3]}/Files"),
+            (HttpMethod.Get, $"Retimer/Items/{server.Episodes[3]}/Entries?query=Frieren"),
+            (HttpMethod.Put, $"Retimer/Items/{server.Episodes[3]}/Entry"),
             (HttpMethod.Delete, $"Retimer/Items/{server.Episodes[3]}/Subtitle"),
             (HttpMethod.Get, "Retimer/Settings"),
             (HttpMethod.Put, "Retimer/Settings"),
-            (HttpMethod.Post, "Retimer/Test/jimaku")
+            (HttpMethod.Post, "Retimer/Test/jimaku"),
+            (HttpMethod.Post, "Retimer/Test/opensubtitles"),
+            (HttpMethod.Post, "Retimer/Test/retimer"),
+            (HttpMethod.Post, "Retimer/Test/model"),
+            (HttpMethod.Get, $"Plugins/{server.PluginGuid}/Configuration"),
+            (HttpMethod.Post, $"Plugins/{server.PluginGuid}/Configuration")
         })
         {
             using var response = await server.SendAsync(method, path);
@@ -218,17 +231,47 @@ public class PluginTests(JellyfinServer server) : IClassFixture<JellyfinServer>
             Assert.DoesNotContain(secret, text, StringComparison.Ordinal);
         }
 
-        // The keys are on the server's disk, where Jellyfin keeps every plugin's settings.
+        // The keys are on the server's disk, where Jellyfin keeps every plugin's settings, encrypted. The secret
+        // that reads them is a file of its own in the plugin's data folder, for Jellyfin's user only.
         var file = Path.Combine(server.DataDirectory, "plugins", "configurations", "Jellyfin.Plugin.Retimer.xml");
+        var keyFile = Path.Combine(server.DataDirectory, "data", "subtitle-retimer", "settings.key");
         var xml = await File.ReadAllTextAsync(file, TestContext.Current.CancellationToken);
-        Assert.Contains("<JimakuApiKey>key &amp; &lt;one&gt;</JimakuApiKey>", xml, StringComparison.Ordinal);
-        Assert.Contains("<RetimerApiKey>" + JellyfinServer.GoodRetimerKey + "</RetimerApiKey>", xml, StringComparison.Ordinal);
+        foreach (var secret in new[] { "key &", JellyfinServer.GoodRetimerKey, JellyfinServer.GoodOpenRouterKey })
+        {
+            Assert.DoesNotContain(secret, xml, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("<JimakuApiKey>enc:v1:", xml, StringComparison.Ordinal);
+        Assert.Contains("<RetimerApiKey>enc:v1:", xml, StringComparison.Ordinal);
+        Assert.Equal(32, new FileInfo(keyFile).Length);
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(keyFile));
+        }
 
         // An empty key field keeps the stored key, and a value the plugin does not know is refused.
+        var stored = xml[xml.IndexOf("<JimakuApiKey>", StringComparison.Ordinal)..xml.IndexOf("</JimakuApiKey>", StringComparison.Ordinal)];
         await server.SaveSettingsAsync(new JsonObject { ["JimakuApiKey"] = string.Empty, ["RemoveSongs"] = false });
-        Assert.Contains("key &amp; &lt;one&gt;", await File.ReadAllTextAsync(file, TestContext.Current.CancellationToken), StringComparison.Ordinal);
+        Assert.Contains(stored, await File.ReadAllTextAsync(file, TestContext.Current.CancellationToken), StringComparison.Ordinal);
         using var bad = await server.SendAsync(HttpMethod.Put, "Retimer/Settings", server.AdminToken, new JsonObject { ["SendAudio"] = "sometimes" });
         Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+
+        // Jellyfin's own call for plugin settings shows an administrator the encrypted values only, and a key
+        // sent in plain through it is encrypted before it reaches the file.
+        var stock = (await server.GetJsonAsync($"Plugins/{server.PluginGuid}/Configuration", server.AdminToken))!.AsObject();
+        Assert.DoesNotContain(JellyfinServer.GoodRetimerKey, stock.ToJsonString(), StringComparison.Ordinal);
+        Assert.StartsWith("enc:v1:", stock["RetimerApiKey"]!.GetValue<string>(), StringComparison.Ordinal);
+        stock["OpenRouterApiKey"] = "sk-or-typed-through-jellyfin";
+        using (var posted = await server.SendAsync(HttpMethod.Post, $"Plugins/{server.PluginGuid}/Configuration", server.AdminToken, stock))
+        {
+            Assert.True(posted.IsSuccessStatusCode, $"POST Plugins/{server.PluginGuid}/Configuration answered {(int)posted.StatusCode}");
+        }
+
+        xml = await File.ReadAllTextAsync(file, TestContext.Current.CancellationToken);
+        Assert.DoesNotContain("typed-through-jellyfin", xml, StringComparison.Ordinal);
+        Assert.Contains("<OpenRouterApiKey>enc:v1:", xml, StringComparison.Ordinal);
+        Assert.True((await server.GetJsonAsync("Retimer/Settings", server.AdminToken))!["HasOpenRouterApiKey"]!.GetValue<bool>());
+        await server.SaveSettingsAsync(server.StandInSettings());
     }
 
     [Fact]

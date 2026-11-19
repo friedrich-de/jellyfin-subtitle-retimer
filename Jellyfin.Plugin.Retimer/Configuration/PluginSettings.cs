@@ -16,4 +16,7 @@ public sealed class PluginSettings : IPluginSettings
         var plugin = Plugin.Instance ?? throw new InvalidOperationException("The plugin is not loaded.");
         plugin.UpdateConfiguration(configuration);
     }
+
+    /// <inheritdoc />
+    public string Reveal(string? stored) => Plugin.Instance?.Keys.Reveal(stored) ?? string.Empty;
 }

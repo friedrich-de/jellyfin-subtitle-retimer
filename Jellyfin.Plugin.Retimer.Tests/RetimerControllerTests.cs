@@ -252,7 +252,7 @@ public sealed class RetimerControllerTests : IDisposable
         }
 
         Assert.Equal("no-store", controller.Response.Headers.CacheControl.ToString());
-        Assert.Equal("rt_new-secret", _w.Settings.Current.RetimerApiKey);
+        Assert.Equal("rt_new-secret", _w.Settings.Reveal(_w.Settings.Current.RetimerApiKey));
         Problem(controller.SaveSettings(new SettingsUpdate { SendAudio = "sometimes" }), StatusCodes.Status400BadRequest);
         Problem(await controller.Test("nothing", null, Token), StatusCodes.Status404NotFound);
     }

@@ -124,10 +124,15 @@ and to its settings. To put the page in the side menu for everyone, an administr
 fetch" can open fetching to every signed-in user. A job can be cancelled by whoever started it and
 by administrators. Only a subtitle the plugin saved itself can be removed through it.
 
-The keys are stored by Jellyfin in `plugins/configurations/Jellyfin.Plugin.Retimer.xml` on the
-server, readable by whoever administers the machine. The plugin's endpoints never return a key: the
-settings say only whether one is stored. Jellyfin's own `GET /Plugins/{id}/Configuration` returns
-them to administrators, as for every plugin.
+The keys and the OpenSubtitles password are stored by Jellyfin in
+`plugins/configurations/Jellyfin.Plugin.Retimer.xml`, encrypted (values that start with `enc:v1:`).
+They are read back only for the call that sends them. The secret that encrypts them is
+`data/subtitle-retimer/settings.key` in Jellyfin's data folder, readable only by the user Jellyfin
+runs as. So a search of the server's files, a copy of its settings folder or Jellyfin's own
+`GET /Plugins/{id}/Configuration` (administrators only) shows no key. Whoever can read both files
+can still recover the keys, as can whoever administers the machine. Copying the settings file to
+another server without that secret loses the keys: enter them again there. The plugin's endpoints
+never return a key: the settings say only whether one is stored.
 
 ## Not in this version
 

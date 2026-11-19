@@ -337,7 +337,7 @@ public sealed class JimakuClient : IJimakuClient
 
     private async Task<IReadOnlyList<T>> GetListAsync<T>(string relativeUrl, CancellationToken cancellationToken)
     {
-        var key = _settings.Current.JimakuApiKey?.Trim();
+        var key = _settings.Reveal(_settings.Current.JimakuApiKey).Trim();
         if (string.IsNullOrEmpty(key))
         {
             throw new JimakuException(JimakuError.NotConfigured, "No Jimaku API key is set in the plugin's settings.");

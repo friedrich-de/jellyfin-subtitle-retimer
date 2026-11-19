@@ -1,8 +1,9 @@
 (function () {
     'use strict';
 
-    // The page lives at <base>/Retimer, next to the web client at <base>/web/.
-    var base = location.pathname.replace(/\/Retimer\/?$/i, '');
+    // The page lives at <base>/Retimer, next to the web client at <base>/web/. The base starts with one
+    // slash at most, so an address such as //other.host/Retimer cannot send the login to another server.
+    var base = pageBase(location.pathname);
     var token = null;
     var status = null;
 
@@ -21,6 +22,10 @@
     document.getElementById('homeLink').href = base + '/web/';
 
     // ---------------------------------------------------------------- small helpers
+
+    function pageBase(path) {
+        return path.replace(/\/Retimer\/?$/i, '').replace(/^[\/\\]+/, '/').replace(/\/+$/, '');
+    }
 
     function h(tag, props) {
         var node = document.createElement(tag);

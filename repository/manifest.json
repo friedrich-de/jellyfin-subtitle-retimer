@@ -8,6 +8,14 @@
     "category": "Subtitles",
     "versions": [
       {
+        "version": "0.4.1.0",
+        "changelog": "Keys are stored encrypted.\n\n- The API keys and the OpenSubtitles password are encrypted in the plugin's settings file and read back only for the call that sends them. The secret that encrypts them is a file of its own in Jellyfin's data folder (`data/subtitle-retimer/settings.key`), readable only by the user Jellyfin runs as. Keys stored in plain by 0.4.0.0 are encrypted at the first start.\n- Settings copied from another server lose their keys, because only the server that encrypted them can read them: enter them again on the settings screen. The same goes for a step back to 0.4.0.0.\n- The page keeps every call on its own server, whatever address it was opened under, and OpenSubtitles may only move the login to one of its own hosts.",
+        "targetAbi": "12.4.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/friedrich-de/jellyfin-plugin-retimer/main/repository/subtitle-retimer_0.4.1.0.zip",
+        "checksum": "a9e32db0a015a3cc9ce3fc7c12fa23fe",
+        "timestamp": "2026-11-19T11:29:17Z"
+      },
+      {
         "version": "0.4.0.0",
         "changelog": "The first public release, for Jellyfin 12.4.\n\n- A page at /Retimer for every signed-in user: your shows with their posters, a show's episodes with their subtitle state, a file picker, the activity of jobs, and settings for administrators.\n- Gets subtitles from Jimaku and OpenSubtitles. A model through OpenRouter (Haiku 5.5 by default, with your key) picks the entry, matches files to episodes and checks the language.\n- Retimes the subtitle with your own Retimer API server against the video's subtitle tracks or its audio, and can read picture subtitles (PGS) into text.\n- Saves the subtitle next to the video, and Jellyfin lists it at once.\n- Daily limits on jobs and cost.",
         "targetAbi": "12.4.0.0",

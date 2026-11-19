@@ -110,7 +110,7 @@ internal sealed class OpenRouterClient : IModelClient
 
     public async Task<ChatAnswer> ChatAsync(string modelId, JsonArray messages, JsonArray tools, string? forcedTool, int maxTokens, CancellationToken cancellationToken)
     {
-        var key = _settings.Current.OpenRouterApiKey?.Trim();
+        var key = _settings.Reveal(_settings.Current.OpenRouterApiKey).Trim();
         if (string.IsNullOrEmpty(key))
         {
             throw new ModelException(ModelError.NotConfigured, "No OpenRouter API key is set in the plugin's settings.");

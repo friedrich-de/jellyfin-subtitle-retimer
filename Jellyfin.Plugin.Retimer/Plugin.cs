@@ -1,10 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Security.Cryptography;
 using Jellyfin.Plugin.Retimer.Configuration;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Plugins;
 using MediaBrowser.Model.Plugins;
 using MediaBrowser.Model.Serialization;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.Retimer;
 
@@ -54,10 +57,13 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
     /// </summary>
     /// <param name="applicationPaths">Instance of the <see cref="IApplicationPaths"/> interface.</param>
     /// <param name="xmlSerializer">Instance of the <see cref="IXmlSerializer"/> interface.</param>
-    public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer)
+    /// <param name="logger">Instance of the <see cref="ILogger{Plugin}"/> interface.</param>
+    public Plugin(IApplicationPaths applicationPaths, IXmlSerializer xmlSerializer, ILogger<Plugin> logger)
         : base(applicationPaths, xmlSerializer)
     {
+        Keys = new KeyProtector(Path.Combine(applicationPaths.DataPath, PluginServiceRegistrator.DataFolderName, KeyProtector.FileName));
         Instance = this;
+        ProtectStoredKeys(logger);
     }
 
     /// <summary>
@@ -90,6 +96,58 @@ public class Plugin : BasePlugin<PluginConfiguration>, IHasWebPages
         }
     ];
 
+    /// <summary>
+    /// Gets what encrypts the keys and the password in the settings file.
+    /// </summary>
+    internal KeyProtector Keys { get; }
+
     /// <inheritdoc />
     public IEnumerable<PluginPageInfo> GetPages() => Pages;
+
+    /// <summary>
+    /// Stores new settings, with every key and the password encrypted. Jellyfin's own call for plugin settings
+    /// comes through here too, so a key typed in plain never reaches the file.
+    /// </summary>
+    /// <param name="configuration">The new settings.</param>
+    public override void UpdateConfiguration(BasePluginConfiguration configuration)
+    {
+        if (configuration is PluginConfiguration settings)
+        {
+            Keys.ProtectAll(settings);
+        }
+
+        base.UpdateConfiguration(configuration);
+    }
+
+    /// <summary>
+    /// Encrypts the keys a settings file from before 0.4.1.0 holds in plain, and empties the ones this server
+    /// cannot read, such as those of a settings file copied from another server.
+    /// </summary>
+    private void ProtectStoredKeys(ILogger logger)
+    {
+        try
+        {
+            var settings = Configuration;
+            var dropped = Keys.DropUnreadable(settings);
+            var encrypted = Keys.ProtectAll(settings);
+            if (dropped || encrypted)
+            {
+                SaveConfiguration();
+            }
+
+            if (encrypted)
+            {
+                logger.LogInformation("The keys in the plugin's settings are now stored encrypted");
+            }
+
+            if (dropped)
+            {
+                logger.LogWarning("A key in the plugin's settings could not be read with {Path} and was removed; enter it again in the settings", Keys.KeyFilePath);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or CryptographicException)
+        {
+            logger.LogError(ex, "The keys in the plugin's settings could not be encrypted with {Path}; they stay as they are", Keys.KeyFilePath);
+        }
+    }
 }

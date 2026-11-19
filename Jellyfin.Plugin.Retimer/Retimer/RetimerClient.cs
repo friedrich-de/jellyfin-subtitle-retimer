@@ -73,7 +73,7 @@ public sealed class RetimerClient : IRetimerClient, IRetimerApi
     public async Task<RetimerConnectionStatus> CheckConnectionAsync(CancellationToken cancellationToken)
     {
         var configuration = _settings.Current;
-        var key = configuration.RetimerApiKey?.Trim();
+        var key = _settings.Reveal(configuration.RetimerApiKey).Trim();
         if (string.IsNullOrWhiteSpace(configuration.RetimerUrl) || string.IsNullOrEmpty(key))
         {
             return RetimerConnectionStatus.NotConfigured;
@@ -314,7 +314,7 @@ public sealed class RetimerClient : IRetimerClient, IRetimerApi
     private (Uri BaseAddress, string Key) Connection()
     {
         var configuration = _settings.Current;
-        var key = configuration.RetimerApiKey?.Trim();
+        var key = _settings.Reveal(configuration.RetimerApiKey).Trim();
         if (string.IsNullOrWhiteSpace(configuration.RetimerUrl) || string.IsNullOrEmpty(key))
         {
             throw new RetimerException(RetimerError.NotConfigured, "Retimer API's address or key is missing in the settings.");

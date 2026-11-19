@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -321,6 +322,7 @@ internal sealed class OpenSubtitlesSource : ISubtitleSource, IDisposable
     private async Task<string> LoginAsync(CancellationToken cancellationToken)
     {
         var configuration = _settings.Current;
+        // The stored values, encrypted, tell a changed key or login apart without keeping the plain ones.
         var identity = configuration.OpenSubtitlesApiKey + "\n" + configuration.OpenSubtitlesUsername + "\n" + configuration.OpenSubtitlesPassword;
 
         await _loginLock.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -336,7 +338,7 @@ internal sealed class OpenSubtitlesSource : ISubtitleSource, IDisposable
                 throw new SourceException(SourceError.NotConfigured, "OpenSubtitles hands out files only to a login. Add the user name and the password in the settings.");
             }
 
-            var body = new JsonObject { ["username"] = configuration.OpenSubtitlesUsername.Trim(), ["password"] = configuration.OpenSubtitlesPassword };
+            var body = new JsonObject { ["username"] = configuration.OpenSubtitlesUsername.Trim(), ["password"] = _settings.Reveal(configuration.OpenSubtitlesPassword) };
             _token = null;
             _loginBaseAddress = null;
             var answer = await SendOnceAsync(HttpMethod.Post, "login", body, token: null, cancellationToken).ConfigureAwait(false);
@@ -348,10 +350,7 @@ internal sealed class OpenSubtitlesSource : ISubtitleSource, IDisposable
 
             // The answer names the host this account has to use from now on, such as the one for VIP accounts.
             var host = Read<string>(answer?["base_url"]);
-            if (_configuredBaseAddress == _defaultBaseAddress
-                && !string.IsNullOrWhiteSpace(host)
-                && host.EndsWith("opensubtitles.com", StringComparison.OrdinalIgnoreCase)
-                && Uri.TryCreate("https://" + host.Trim() + "/api/v1/", UriKind.Absolute, out var loginBase))
+            if (_configuredBaseAddress == _defaultBaseAddress && TryLoginBaseAddress(host, out var loginBase))
             {
                 _loginBaseAddress = loginBase;
             }
@@ -365,6 +364,28 @@ internal sealed class OpenSubtitlesSource : ISubtitleSource, IDisposable
         {
             _loginLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Reads the host a login answer names. The key and the login go there from then on, so only
+    /// opensubtitles.com itself or one of its own hosts is taken.
+    /// </summary>
+    internal static bool TryLoginBaseAddress(string? host, [NotNullWhen(true)] out Uri? address)
+    {
+        address = null;
+        var name = host?.Trim();
+        if (string.IsNullOrEmpty(name)
+            || !Uri.TryCreate("https://" + name + "/api/v1/", UriKind.Absolute, out var parsed)
+            || !parsed.IsDefaultPort
+            || !string.Equals(parsed.Host, name, StringComparison.OrdinalIgnoreCase)
+            || !(string.Equals(parsed.Host, "opensubtitles.com", StringComparison.OrdinalIgnoreCase)
+                || parsed.Host.EndsWith(".opensubtitles.com", StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        address = parsed;
+        return true;
     }
 
     private async Task<JsonNode?> SendAsync(HttpMethod method, string path, JsonNode? body, bool withLogin, CancellationToken cancellationToken)
@@ -390,7 +411,7 @@ internal sealed class OpenSubtitlesSource : ISubtitleSource, IDisposable
 
     private async Task<JsonNode?> SendOnceAsync(HttpMethod method, string path, JsonNode? body, string? token, CancellationToken cancellationToken)
     {
-        var key = _settings.Current.OpenSubtitlesApiKey?.Trim();
+        var key = _settings.Reveal(_settings.Current.OpenSubtitlesApiKey).Trim();
         if (string.IsNullOrEmpty(key))
         {
             throw new SourceException(SourceError.NotConfigured, "No OpenSubtitles API key is set in the plugin's settings.");

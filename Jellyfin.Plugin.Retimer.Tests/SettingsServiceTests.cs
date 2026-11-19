@@ -81,9 +81,13 @@ public sealed class SettingsServiceTests : IDisposable
         var (view, error) = _service.Save(new SettingsUpdate { JimakuApiKey = "", RetimerApiKey = "  new-retimer  ", RetimerEnabled = true, ClearSecrets = ["OpenRouterApiKey"] });
 
         Assert.Null(error);
-        Assert.Equal("old-jimaku", _w.Settings.Current.JimakuApiKey);
-        Assert.Equal("new-retimer", _w.Settings.Current.RetimerApiKey);
+        Assert.Equal("old-jimaku", _w.Settings.Reveal(_w.Settings.Current.JimakuApiKey));
+        Assert.Equal("new-retimer", _w.Settings.Reveal(_w.Settings.Current.RetimerApiKey));
         Assert.Equal(string.Empty, _w.Settings.Current.OpenRouterApiKey);
+
+        // What is stored is encrypted, also the key that was there before in plain.
+        Assert.StartsWith(KeyProtector.Prefix, _w.Settings.Current.JimakuApiKey, StringComparison.Ordinal);
+        Assert.StartsWith(KeyProtector.Prefix, _w.Settings.Current.RetimerApiKey, StringComparison.Ordinal);
         Assert.True(_w.Settings.Current.RetimerEnabled);
         Assert.True(view!.HasJimakuApiKey && view.HasRetimerApiKey);
         Assert.False(view.HasOpenRouterApiKey);

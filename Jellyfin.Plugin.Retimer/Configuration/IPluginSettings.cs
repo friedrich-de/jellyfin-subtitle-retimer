@@ -6,13 +6,20 @@ namespace Jellyfin.Plugin.Retimer.Configuration;
 public interface IPluginSettings
 {
     /// <summary>
-    /// Gets the current settings.
+    /// Gets the current settings. Keys and the password in them are encrypted: read them with <see cref="Reveal"/>.
     /// </summary>
     PluginConfiguration Current { get; }
 
     /// <summary>
-    /// Stores new settings.
+    /// Stores new settings. A key or password typed in plain is encrypted on the way.
     /// </summary>
     /// <param name="configuration">The settings to store.</param>
     void Save(PluginConfiguration configuration);
+
+    /// <summary>
+    /// Turns a key or password as <see cref="Current"/> holds it back into the plain value, for the one call that sends it.
+    /// </summary>
+    /// <param name="stored">The value as stored.</param>
+    /// <returns>The plain value, or an empty string when none is stored or the stored one cannot be read.</returns>
+    string Reveal(string? stored);
 }

@@ -518,7 +518,7 @@ public class JellyfinServer : IAsyncLifetime
 
     /// <summary>
     /// The stand-in Retimer API: features, a job that is finished at once, its result and its removal,
-    /// in the shapes of retimer-api's README.
+    /// in the shapes of the Retimer API's README.
     /// </summary>
     private async Task<(int Status, byte[] Body, string ContentType)> AnswerAsRetimerAsync(HttpListenerRequest request)
     {

@@ -3,6 +3,13 @@
 Each section is the changelog Jellyfin shows for that version: `dev/package.sh --publish`
 copies it into the repository manifest.
 
+## 0.5.0.1
+
+The project's public home.
+
+- The plugin lives at github.com/friedrich-de/jellyfin-subtitle-retimer and Retimer API at github.com/friedrich-de/subtitle-retimer. The settings page links there.
+- Requests to Jimaku and OpenSubtitles name the plugin `jellyfin-subtitle-retimer`.
+
 ## 0.5.0.0
 
 The page can be installed as an app.

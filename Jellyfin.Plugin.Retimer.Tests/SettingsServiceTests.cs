@@ -54,7 +54,7 @@ public sealed class SettingsServiceTests : IDisposable
             Assert.DoesNotContain(secret, json, StringComparison.Ordinal);
         }
 
-        Assert.Equal("https://github.com/friedrich-de/retimer-api", view.RetimerProjectUrl);
+        Assert.Equal("https://github.com/friedrich-de/subtitle-retimer", view.RetimerProjectUrl);
         Assert.Contains(view.Libraries, library => library.Name == "Anime" && !library.Hidden);
     }
 

@@ -70,7 +70,7 @@ public class JimakuClientTests
         Assert.Equal(HttpMethod.Get, request.Method);
         Assert.Equal("https://jimaku.test/api/entries/search?anilist_id=154587", request.Url.AbsoluteUri);
         Assert.Equal("test-key", request.Authorization);
-        Assert.StartsWith("jellyfin-plugin-retimer/", request.UserAgent, StringComparison.Ordinal);
+        Assert.StartsWith("jellyfin-subtitle-retimer/", request.UserAgent, StringComparison.Ordinal);
 
         var entry = Assert.Single(entries);
         Assert.Equal(4321, entry.Id);

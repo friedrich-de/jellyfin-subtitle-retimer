@@ -42,7 +42,7 @@ internal sealed class OpenSubtitlesSource : ISubtitleSource, IDisposable
     private readonly ILogger<OpenSubtitlesSource> _logger;
     private readonly Uri _configuredBaseAddress;
     private readonly SemaphoreSlim _loginLock = new(1, 1);
-    private readonly string _userAgent = "jellyfin-plugin-retimer v" + (typeof(OpenSubtitlesSource).Assembly.GetName().Version?.ToString(3) ?? "0");
+    private readonly string _userAgent = "jellyfin-subtitle-retimer v" + (typeof(OpenSubtitlesSource).Assembly.GetName().Version?.ToString(3) ?? "0");
 
     private string? _token;
     private string? _tokenFor;

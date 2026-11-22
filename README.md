@@ -58,7 +58,7 @@ Retimer API switched on.
    `Subtitle Retimer` and this URL.
 
    ```
-   https://raw.githubusercontent.com/friedrich-de/jellyfin-plugin-retimer/main/repository/manifest.json
+   https://raw.githubusercontent.com/friedrich-de/jellyfin-subtitle-retimer/main/repository/manifest.json
    ```
 
 2. Install **Subtitle Retimer** from the list of plugins (category Subtitles) and restart Jellyfin.
@@ -71,7 +71,7 @@ Retimer API switched on.
 | [OpenRouter](https://openrouter.ai) key | The model that picks the file for an episode and checks its language. Well under a cent per subtitle with Haiku 5.5. | Required |
 | [Jimaku](https://jimaku.cc) key | Japanese subtitles for anime and dramas. Free, from your Jimaku account page. | One source at least |
 | [OpenSubtitles](https://www.opensubtitles.com) key | Subtitles in many languages. | One source at least |
-| A [retimer-api](https://github.com/friedrich-de/retimer-api) server | Fixes the timing of a downloaded subtitle. You run it yourself, with Docker next to Jellyfin; its README has the steps. | Optional |
+| A [Retimer API](https://github.com/friedrich-de/subtitle-retimer) server | Fixes the timing of a downloaded subtitle. You run it yourself, with Docker next to Jellyfin; its README has the steps. | Optional |
 
 Without Retimer API the plugin still finds, checks and saves subtitles; it just does not retime them.
 
@@ -116,8 +116,8 @@ Without Retimer API the plugin still finds, checks and saves subtitles; it just 
 5. **Save.** The subtitle goes through Jellyfin's own subtitle upload, as `<video>.<language>.srt`
    or `.ass` next to the video, and the plugin refreshes that one item.
 
-Retimer API is a separate service that you run yourself:
-[retimer-api](https://github.com/friedrich-de/retimer-api), on the Jellyfin machine or another one.
+Retimer API is a separate service that you run yourself
+([subtitle-retimer](https://github.com/friedrich-de/subtitle-retimer)), on the Jellyfin machine or another one.
 It is **off until you switch it on**; without it a subtitle is saved as downloaded.
 
 The subtitle language is one setting for the server, and each show can use another one, set on the

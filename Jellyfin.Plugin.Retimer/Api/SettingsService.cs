@@ -92,7 +92,7 @@ internal sealed record SettingsView
 internal sealed partial class SettingsService
 {
     /// <summary>Where Retimer API's code and its description are.</summary>
-    internal const string RetimerProjectUrl = "https://github.com/friedrich-de/retimer-api";
+    internal const string RetimerProjectUrl = "https://github.com/friedrich-de/subtitle-retimer";
 
     internal const int MaxModels = 20;
 

@@ -45,7 +45,7 @@ public sealed class JimakuClient : IJimakuClient
     };
 
     private static readonly ProductInfoHeaderValue _userAgent = new(
-        "jellyfin-plugin-retimer",
+        "jellyfin-subtitle-retimer",
         typeof(JimakuClient).Assembly.GetName().Version?.ToString() ?? "0");
 
     private readonly IHttpClientFactory _httpClientFactory;

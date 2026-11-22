@@ -18,7 +18,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-PUBLIC_URL="https://raw.githubusercontent.com/friedrich-de/jellyfin-plugin-retimer/main/repository"
+PUBLIC_URL="https://raw.githubusercontent.com/friedrich-de/jellyfin-subtitle-retimer/main/repository"
 
 publish=false
 if [ "${1:-}" = "--publish" ]; then

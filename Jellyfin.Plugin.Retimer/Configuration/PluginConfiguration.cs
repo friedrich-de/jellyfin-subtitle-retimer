@@ -153,4 +153,16 @@ public class PluginConfiguration : BasePluginConfiguration
     /// as far as the services report their cost. Zero means no limit.
     /// </summary>
     public double MaxCostPerDay { get; set; } = 2;
+
+    /// <summary>
+    /// Gets or sets a value indicating whether a show that is added to the library from now on is watched by itself.
+    /// </summary>
+    public bool WatchNewShows { get; set; }
+
+    /// <summary>
+    /// Gets or sets for how many days watch mode keeps looking for an episode's subtitle, counted from when the
+    /// episode came into the library or from when its season was switched to watched, whichever is later.
+    /// Zero means it keeps looking for as long as the season is watched.
+    /// </summary>
+    public int WatchDays { get; set; } = 30;
 }

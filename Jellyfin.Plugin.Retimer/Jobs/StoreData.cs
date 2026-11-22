@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Jellyfin.Plugin.Retimer.Jobs;
 
@@ -25,6 +26,49 @@ internal sealed class StoreData
 
     /// <summary>Gets or sets what was used on each day, by its date (UTC).</summary>
     public Dictionary<string, DayUsage> Usage { get; set; } = [];
+
+    /// <summary>
+    /// Gets or sets when "watch new shows" was switched on. Shows that came into the library after it are watched by themselves.
+    /// </summary>
+    public DateTimeOffset? WatchNewShowsSince { get; set; }
+
+    /// <summary>Gets or sets how the last check of the watched shows went.</summary>
+    public WatchRun? LastWatch { get; set; }
+}
+
+/// <summary>
+/// One check of the watched shows: when it ran and what it found.
+/// </summary>
+internal sealed class WatchRun
+{
+    public DateTimeOffset Started { get; set; }
+
+    public DateTimeOffset? Finished { get; set; }
+
+    /// <summary>Gets or sets how many watched shows and films were looked at.</summary>
+    public int Shows { get; set; }
+
+    /// <summary>Gets or sets how many episodes had no subtitle and were looked for.</summary>
+    public int LookedFor { get; set; }
+
+    /// <summary>Gets or sets how many jobs the check put in the line.</summary>
+    public int JobsStarted { get; set; }
+
+    /// <summary>Gets or sets why the check stopped early, such as a daily limit, or <c>null</c>.</summary>
+    public string? Problem { get; set; }
+
+    public WatchRun Clone() => (WatchRun)MemberwiseClone();
+}
+
+/// <summary>
+/// A season that is watched, or not, on its own, apart from what the show as a whole says.
+/// </summary>
+internal sealed class SeasonWatch
+{
+    public bool On { get; set; }
+
+    /// <summary>Gets or sets when the season was switched on. An episode is looked for from then at the earliest.</summary>
+    public DateTimeOffset Since { get; set; }
 }
 
 internal sealed class ShowRecord
@@ -44,13 +88,31 @@ internal sealed class ShowRecord
     /// </summary>
     public List<RejectedKind> Rejected { get; set; } = [];
 
+    /// <summary>
+    /// Gets or sets whether the whole show is watched, seasons added later included. <c>false</c> says that someone
+    /// switched it off, <c>null</c> that nobody ever switched it.
+    /// </summary>
+    public bool? Watch { get; set; }
+
+    /// <summary>Gets or sets when the whole show was switched to watched.</summary>
+    public DateTimeOffset? WatchSince { get; set; }
+
+    /// <summary>
+    /// Gets or sets the seasons that are watched, or not, apart from what <see cref="Watch"/> says, by season key
+    /// (the season's number, or "-" for episodes without one).
+    /// </summary>
+    public Dictionary<string, SeasonWatch> Seasons { get; set; } = [];
+
     /// <summary>A copy that is safe to read while the stored record changes. The matches, mappings and rejections themselves are never changed in place.</summary>
     public ShowRecord Snapshot() => new()
     {
         Language = Language,
         Matches = new Dictionary<string, EntryMatch>(Matches, StringComparer.Ordinal),
         Mappings = new Dictionary<string, FileMapping>(Mappings, StringComparer.Ordinal),
-        Rejected = [.. Rejected]
+        Rejected = [.. Rejected],
+        Watch = Watch,
+        WatchSince = WatchSince,
+        Seasons = Seasons.ToDictionary(pair => pair.Key, pair => new SeasonWatch { On = pair.Value.On, Since = pair.Value.Since }, StringComparer.Ordinal)
     };
 }
 
@@ -144,6 +206,9 @@ internal sealed class ItemRecord
 
     /// <summary>Gets or sets the files that were tried and rejected.</summary>
     public List<TriedFile> Tried { get; set; } = [];
+
+    /// <summary>Gets or sets when watch mode last put a job in the line for this video.</summary>
+    public DateTimeOffset? WatchQueuedAt { get; set; }
 
     /// <summary>A copy that is safe to read while the stored record changes.</summary>
     public ItemRecord Snapshot()

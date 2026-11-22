@@ -13,6 +13,7 @@ using Jellyfin.Plugin.Retimer.Library;
 using Jellyfin.Plugin.Retimer.Picking;
 using Jellyfin.Plugin.Retimer.Retimer;
 using Jellyfin.Plugin.Retimer.Sources;
+using Jellyfin.Plugin.Retimer.Watch;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -161,6 +162,12 @@ internal sealed class FakeLibrary : IVideoLibrary
     }
 
     public void Invalidate() => Invalidations++;
+
+    /// <summary>Gets when each show came into the library, for "watch new shows".</summary>
+    public Dictionary<Guid, DateTimeOffset> ShowsAdded { get; } = [];
+
+    public IReadOnlyList<Guid> GetShowsAddedSince(DateTimeOffset since) =>
+        ShowsAdded.Where(pair => pair.Value >= since).Select(pair => pair.Key).ToList();
 }
 
 /// <summary>
@@ -445,6 +452,20 @@ internal static class Subtitles
 }
 
 /// <summary>
+/// Jellyfin's schedule for the check of the watched shows, as a test sets it.
+/// </summary>
+internal sealed class FakeSchedule : IWatchSchedule
+{
+    public TimeSpan? Interval { get; set; } = TimeSpan.FromHours(3);
+
+    public bool Scheduled { get; set; } = true;
+
+    public int Runs { get; private set; }
+
+    public void RunNow() => Runs++;
+}
+
+/// <summary>
 /// The plugin's services wired to fakes, with a store in a folder of its own.
 /// </summary>
 internal sealed class World : IDisposable
@@ -458,8 +479,16 @@ internal sealed class World : IDisposable
         Finder = new FileFinder(Sources, Picker, Store, Settings, Library, NullLogger<FileFinder>.Instance);
         Runner = new JobRunner(Finder, Sources, Picker, Retimer, Library, Store, Settings, NullLogger<JobRunner>.Instance, TimeSpan.FromMilliseconds(1));
         Queue = new JobQueue(Runner, Store, Settings, NullLogger<JobQueue>.Instance);
-        Page = new PageService(Settings, Library, Sources, Finder, Queue, Store, Picker);
+        Watch = new WatchService(Settings, Library, Sources, Finder, Queue, Store, Picker, Schedule, NullLogger<WatchService>.Instance, () => Now ?? DateTimeOffset.UtcNow, TimeSpan.FromMilliseconds(50));
+        Page = new PageService(Settings, Library, Sources, Finder, Queue, Store, Picker, Watch);
     }
+
+    /// <summary>Gets or sets the time watch mode sees, or <c>null</c> for the real time.</summary>
+    public DateTimeOffset? Now { get; set; }
+
+    public FakeSchedule Schedule { get; } = new();
+
+    public WatchService Watch { get; }
 
     public string Directory { get; }
 
@@ -538,6 +567,7 @@ internal sealed class World : IDisposable
 
     public void Dispose()
     {
+        Watch.Dispose();
         Queue.Dispose();
         Store.Dispose();
         try

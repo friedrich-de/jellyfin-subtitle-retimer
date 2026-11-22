@@ -75,7 +75,11 @@ public partial class ContractTests
             ("t", Properties(typeof(TriedView))),
             ("e", Properties(typeof(EpisodeView), typeof(EntryView))),
             ("f", Properties(typeof(FileView))),
-            ("x", Properties(typeof(SourceView), typeof(ModelEntry)))
+            ("x", Properties(typeof(SourceView), typeof(ModelEntry))),
+            ("w", Properties(typeof(WatchView))),
+            ("run", Properties(typeof(WatchRunView))),
+            ("ws", Properties(typeof(WatchedShowView))),
+            ("wv", Properties(typeof(WatchedVideoView)))
         };
 
         foreach (var (variable, known) in cases)
@@ -89,6 +93,9 @@ public partial class ContractTests
         Assert.NotEmpty(FieldsReadFrom(script, "job"));
         Assert.NotEmpty(FieldsReadFrom(script, "episode"));
         Assert.NotEmpty(FieldsReadFrom(script, "file"));
+        Assert.NotEmpty(FieldsReadFrom(script, "w"));
+        Assert.NotEmpty(FieldsReadFrom(script, "ws"));
+        Assert.NotEmpty(FieldsReadFrom(script, "wv"));
     }
 
     [Fact]
@@ -130,6 +137,7 @@ public partial class ContractTests
             (@"start\(\{([^}]+)\}", typeof(StartJobsRequest)),
             (@"/Language', \{ method: 'PUT', body: \{([^}]+)\}", typeof(SetLanguageRequest)),
             (@"/Entry', \{ method: 'PUT', body: \{([^}]+)\}", typeof(PinEntryRequest)),
+            (@"/Watch', \{ method: 'PUT', body: \{([^}]+)\}", typeof(WatchRequest)),
             (@"/Retimer/Test/' \+ target, \{ method: 'POST', body: \{([^}]+)\}", typeof(ModelTestRequest))
         })
         {
@@ -154,7 +162,7 @@ public partial class ContractTests
         Assert.Equal(
             [
                 "/Retimer/Items/", "/Retimer/Jobs", "/Retimer/Jobs/", "/Retimer/Jobs?since=", "/Retimer/Libraries", "/Retimer/Libraries/",
-                "/Retimer/Settings", "/Retimer/Shows/", "/Retimer/Status", "/Retimer/Test/"
+                "/Retimer/Settings", "/Retimer/Shows/", "/Retimer/Status", "/Retimer/Test/", "/Retimer/Watch", "/Retimer/Watch/Check"
             ],
             called);
 
@@ -166,7 +174,7 @@ public partial class ContractTests
         }
 
         // And the tails the page adds to an id are routes too.
-        foreach (var tail in new[] { "/Shows", "/Language", "/Retry", "/Files", "/Entries", "/Entry", "/Subtitle" })
+        foreach (var tail in new[] { "/Shows", "/Language", "/Retry", "/Files", "/Entries", "/Entry", "/Subtitle", "/Watch" })
         {
             Assert.Contains("'" + tail, Script(), StringComparison.Ordinal);
             Assert.Contains(routes, route => route.EndsWith("}" + tail, StringComparison.Ordinal));

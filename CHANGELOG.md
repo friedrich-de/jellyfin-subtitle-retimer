@@ -3,6 +3,15 @@
 Each section is the changelog Jellyfin shows for that version: `dev/package.sh --publish`
 copies it into the repository manifest.
 
+## 0.6.0.0
+
+Watch mode: shows and seasons get their subtitles by themselves.
+
+- "Watch this show" on a show's page fetches the subtitle of each episode as soon as a source has it, for every season and the seasons added later. Each season has a switch of its own, so you can watch only the season that airs. A film can be watched too. A watched show has an eye on its poster.
+- Jellyfin runs the check every 3 hours as its own scheduled task, "Check watched shows for subtitles", and a show is checked a few minutes after it gets a new episode. A check starts a job only when a source lists a file that was not tried yet.
+- An episode is looked for for 30 days after it came, or after its season was switched on. The settings change the number, and "Watch new shows" watches every show that comes into the library from then on.
+- Activity has a second tab, Watching: what is watched, which episodes still wait, and how the last check went.
+
 ## 0.5.0.1
 
 The project's public home.

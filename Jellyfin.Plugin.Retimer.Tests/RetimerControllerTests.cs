@@ -31,8 +31,9 @@ public sealed class RetimerControllerTests : IDisposable
         _callers.Caller = _w.Admin;
         _services = new PluginServices(
             _w.Page,
-            new SettingsService(_w.Settings, _w.Library, _w.Sources, _w.Picker, new FakeRetimer(), _w.Retimer, _w.Queue),
-            _callers);
+            new SettingsService(_w.Settings, _w.Library, _w.Sources, _w.Picker, new FakeRetimer(), _w.Retimer, _w.Queue, _w.Watch, _w.Store),
+            _callers,
+            _w.Watch);
     }
 
     private static CancellationToken Token => TestContext.Current.CancellationToken;

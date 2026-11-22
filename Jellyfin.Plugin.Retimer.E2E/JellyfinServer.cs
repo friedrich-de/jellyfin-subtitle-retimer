@@ -94,6 +94,9 @@ public class JellyfinServer : IAsyncLifetime
 
     public string OpenRouterUrl => new Uri(HelperAddress, "openrouter").AbsoluteUri;
 
+    /// <summary>Gets how long after a new episode the plugin checks a watched show, in seconds: 3 minutes on a real server.</summary>
+    public static int WatchDelaySeconds => 8;
+
     public string ViewerId { get; private set; } = string.Empty;
 
     public string ShowId { get; private set; } = string.Empty;
@@ -123,6 +126,11 @@ public class JellyfinServer : IAsyncLifetime
     /// Gets a value indicating whether this fixture starts a server at all.
     /// </summary>
     protected virtual bool ShouldStart => Enabled;
+
+    /// <summary>
+    /// Gets the episodes the stand-in Jimaku lists a file for, when it is asked for all files of the show.
+    /// </summary>
+    protected virtual IReadOnlyList<int> ListedEpisodes => [3, 4, 5];
 
     /// <summary>
     /// Call first in every test: skips it when no server was asked for.
@@ -454,7 +462,7 @@ public class JellyfinServer : IAsyncLifetime
         {
             return (200, query["episode"] switch
             {
-                null => "[" + Listed(3) + "," + Listed(4) + "," + Listed(5) + "," + batch + "]",
+                null => "[" + string.Join(",", ListedEpisodes.Select(Listed)) + "," + batch + "]",
                 "3" => "[" + Listed(3) + "]",
                 _ => "[]"
             }, null);
@@ -717,6 +725,55 @@ public class JellyfinServer : IAsyncLifetime
     /// Makes three small episodes with ffmpeg and gives them to the server as a library that asks no
     /// metadata service: episodes 3 and 4 hold two English subtitle tracks, episode 5 holds none.
     /// </summary>
+    /// <summary>
+    /// Makes a one-minute video for an episode of the show in its season folder: with an English full track
+    /// and an English signs track inside, or with no subtitle at all.
+    /// </summary>
+    public async Task MakeEpisodeAsync(int episode, bool withTracks)
+    {
+        var full = Path.Combine(_root, "full.srt");
+        var signs = Path.Combine(_root, "signs.srt");
+        var arguments = new List<string>
+        {
+            "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "color=c=black:s=160x90:r=2",
+            "-f", "lavfi", "-i", "anullsrc=r=8000:cl=mono"
+        };
+        if (withTracks)
+        {
+            arguments.AddRange(["-i", full, "-i", signs]);
+        }
+
+        arguments.AddRange(["-t", "60", "-map", "0:v", "-map", "1:a"]);
+        if (withTracks)
+        {
+            arguments.AddRange(
+            [
+                "-map", "2:s", "-map", "3:s", "-c:s", "srt",
+                "-metadata:s:s:0", "language=eng", "-metadata:s:s:0", "title=Full", "-disposition:s:0", "default",
+                "-metadata:s:s:1", "language=eng", "-metadata:s:s:1", "title=Signs", "-disposition:s:1", "0"
+            ]);
+        }
+
+        arguments.AddRange(["-c:v", "mpeg4", "-c:a", "aac", "-metadata:s:a:0", "language=jpn"]);
+        arguments.Add(Path.Combine(SeasonDirectory, string.Create(CultureInfo.InvariantCulture, $"{ShowName} - S01E{episode:00}.mkv")));
+
+        var ffmpeg = Environment.GetEnvironmentVariable("RETIMER_E2E_FFMPEG");
+        var start = new ProcessStartInfo(string.IsNullOrEmpty(ffmpeg) ? "ffmpeg" : ffmpeg) { RedirectStandardError = true, UseShellExecute = false };
+        foreach (var argument in arguments)
+        {
+            start.ArgumentList.Add(argument);
+        }
+
+        using var process = Process.Start(start)!;
+        var errors = await process.StandardError.ReadToEndAsync(_stopping.Token);
+        await process.WaitForExitAsync(_stopping.Token);
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException("ffmpeg could not make a test video: " + errors);
+        }
+    }
+
     private async Task CreateLibraryAsync()
     {
         Directory.CreateDirectory(SeasonDirectory);
@@ -726,45 +783,7 @@ public class JellyfinServer : IAsyncLifetime
         await File.WriteAllTextAsync(signs, SignsTrack, _stopping.Token);
         foreach (var episode in new[] { 3, 4, 5 })
         {
-            var arguments = new List<string>
-            {
-                "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-                "-f", "lavfi", "-i", "color=c=black:s=160x90:r=2",
-                "-f", "lavfi", "-i", "anullsrc=r=8000:cl=mono"
-            };
-            if (episode != 5)
-            {
-                arguments.AddRange(["-i", full, "-i", signs]);
-            }
-
-            arguments.AddRange(["-t", "60", "-map", "0:v", "-map", "1:a"]);
-            if (episode != 5)
-            {
-                arguments.AddRange(
-                [
-                    "-map", "2:s", "-map", "3:s", "-c:s", "srt",
-                    "-metadata:s:s:0", "language=eng", "-metadata:s:s:0", "title=Full", "-disposition:s:0", "default",
-                    "-metadata:s:s:1", "language=eng", "-metadata:s:s:1", "title=Signs", "-disposition:s:1", "0"
-                ]);
-            }
-
-            arguments.AddRange(["-c:v", "mpeg4", "-c:a", "aac", "-metadata:s:a:0", "language=jpn"]);
-            arguments.Add(Path.Combine(SeasonDirectory, string.Create(CultureInfo.InvariantCulture, $"{ShowName} - S01E0{episode}.mkv")));
-
-            var ffmpeg = Environment.GetEnvironmentVariable("RETIMER_E2E_FFMPEG");
-            var start = new ProcessStartInfo(string.IsNullOrEmpty(ffmpeg) ? "ffmpeg" : ffmpeg) { RedirectStandardError = true, UseShellExecute = false };
-            foreach (var argument in arguments)
-            {
-                start.ArgumentList.Add(argument);
-            }
-
-            using var process = Process.Start(start)!;
-            var errors = await process.StandardError.ReadToEndAsync(_stopping.Token);
-            await process.WaitForExitAsync(_stopping.Token);
-            if (process.ExitCode != 0)
-            {
-                throw new InvalidOperationException("ffmpeg could not make a test video: " + errors);
-            }
+            await MakeEpisodeAsync(episode, withTracks: episode != 5);
         }
 
         static JsonObject NoFetchers(string type) => new() { ["Type"] = type, ["MetadataFetchers"] = new JsonArray(), ["ImageFetchers"] = new JsonArray() };
@@ -835,6 +854,7 @@ public class JellyfinServer : IAsyncLifetime
 
         // The plugin reads these once, when the server starts.
         start.Environment["RETIMER_OPENROUTER_API_URL"] = OpenRouterUrl;
+        start.Environment["RETIMER_WATCH_DELAY_SECONDS"] = WatchDelaySeconds.ToString(CultureInfo.InvariantCulture);
         start.Environment.Remove("OPENROUTER_API_KEY");
         start.Environment.Remove("ANTHROPIC_RETIMER_API_KEY");
         if (UseStandInJimaku)

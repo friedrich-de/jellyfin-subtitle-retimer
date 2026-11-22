@@ -136,6 +136,51 @@
         return count + ' ' + (count === 1 ? one : many);
     }
 
+    // How often Jellyfin checks the watched shows, as words: "every 3 hours".
+    function every(hours) {
+        if (!hours) { return 'on the schedule set in Jellyfin'; }
+        if (hours < 1) { return 'every ' + plural(Math.round(hours * 60), 'minute', 'minutes'); }
+        if (Math.abs(hours - Math.round(hours)) < 0.01) { return Math.round(hours) === 1 ? 'every hour' : 'every ' + Math.round(hours) + ' hours'; }
+        return 'every ' + hours.toFixed(1) + ' hours';
+    }
+
+    // A day as the reader writes it, with the year only when it is not this one.
+    function day(iso) {
+        var date = new Date(iso);
+        return date.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: date.getFullYear() === new Date().getFullYear() ? undefined : 'numeric' });
+    }
+
+    // A small eye, the mark of what is watched. Drawn here, so the page loads no picture for it.
+    function eye() {
+        var ns = 'http://www.w3.org/2000/svg';
+        var svg = document.createElementNS(ns, 'svg');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('aria-hidden', 'true');
+        svg.setAttribute('class', 'eye');
+        var lid = document.createElementNS(ns, 'path');
+        lid.setAttribute('d', 'M2 12c2.4-4.2 5.8-6.5 10-6.5s7.6 2.3 10 6.5c-2.4 4.2-5.8 6.5-10 6.5S4.4 16.2 2 12z');
+        var pupil = document.createElementNS(ns, 'circle');
+        pupil.setAttribute('cx', '12');
+        pupil.setAttribute('cy', '12');
+        pupil.setAttribute('r', '3.2');
+        svg.append(lid, pupil);
+        return svg;
+    }
+
+    // An on and off switch. It calls change(on), which gives a promise, and goes back when that fails.
+    function toggle(label, on, disabled, change, name) {
+        var box = h('input', { type: 'checkbox', role: 'switch', checked: !!on, disabled: !!disabled, 'aria-label': name || null });
+        box.addEventListener('change', function () {
+            var wanted = box.checked;
+            box.disabled = true;
+            change(wanted).catch(function (error) {
+                box.checked = !wanted;
+                say(error.message);
+            }).then(function () { box.disabled = !!disabled; });
+        });
+        return h('label', { class: 'switch' + (disabled ? ' off' : '') }, box, h('span', { class: 'track', 'aria-hidden': 'true' }), h('span', { text: label }));
+    }
+
     function money(value) {
         if (value > 0 && value < 0.001) { return 'less than $0.001'; }
         return '$' + (value < 0.1 && value > 0 ? value.toFixed(3) : value.toFixed(2));
@@ -310,7 +355,8 @@
                         h('div', { class: 'letter', text: s.Name }),
                         picture(s.Id, s.ImageTag, 300),
                         s.Total > 0 ? h('span', { class: 'badge' + (missing === 0 ? ' done' : ''), text: missing === 0 ? '✓' : String(missing), title: missing === 0 ? 'Every video has a subtitle' : plural(missing, 'video has', 'videos have') + ' no subtitle' }) : null,
-                        busy[s.Id] ? h('span', { class: 'badge busy', text: 'Working' }) : null);
+                        busy[s.Id] ? h('span', { class: 'badge busy', text: 'Working' }) : null,
+                        s.Watched ? h('span', { class: 'badge watch', role: 'img', 'aria-label': 'Watched', title: 'Watched: new subtitles are fetched by themselves' }, eye()) : null);
                     if (s.Total > 0) {
                         var meter = h('i');
                         meter.style.width = Math.round(100 * s.Have / s.Total) + '%';
@@ -485,6 +531,13 @@
                 bar.style.width = Math.round(100 * job.Step / job.Steps) + '%';
                 stateBox.append(h('div', { class: 'steps', title: 'Step ' + job.Step + ' of ' + job.Steps }, bar));
             }
+            if (!job && !finishing && episode.Watched && (state === 'none' || state === 'nofit' || state === 'failed')) {
+                stateBox.append(h('div', { class: 'muted small watchLine' }, eye(), h('span', {
+                    text: episode.WatchOver
+                        ? 'Watched, but no longer looked for: its ' + data.WatchDays + ' days are over'
+                        : 'Watched: looked for again ' + every(data.WatchEveryHours) + (episode.WatchUntil ? ' until ' + day(episode.WatchUntil) : '')
+                })));
+            }
             if (!job && !finishing && episode.FromPlugin && episode.FileName) {
                 // The whole name is shown: its end is what tells the files of an episode apart.
                 stateBox.append(h('div', { class: 'muted small', text: 'From ' + sourceName(episode.Source) + (episode.PickedBy ? ', picked by ' + episode.PickedBy : '') }));
@@ -551,6 +604,37 @@
             });
         }
 
+        // What a watched show or season gets, in one sentence.
+        function watchText() {
+            return (data.IsMovie ? 'Its subtitle is looked for now, and again ' : 'Episodes without a subtitle are looked for now, and again ')
+                + every(data.WatchEveryHours)
+                + (data.WatchDays > 0 ? (data.IsMovie ? ', for ' : ', each for ') + plural(data.WatchDays, 'day', 'days') + '.' : '.');
+        }
+
+        // Switches the whole show (season null) or one season to watched, or not.
+        function setWatch(on, season) {
+            var key = season ? season.Key : null;
+            say(null);
+            return call('/Retimer/Shows/' + data.Id + '/Watch', { method: 'PUT', body: { Watch: on, Season: key } }).then(function () {
+                var what = season ? season.Name : data.IsMovie ? 'this film' : 'this show';
+                say(on ? 'Watching ' + what + '. ' + watchText() : 'No longer watching ' + what + '.', 'info');
+                // Switching on checks at once, and the jobs it starts show up in a moment.
+                if (on) { setTimeout(pollJobs, 1500); }
+                return load();
+            });
+        }
+
+        function watchSummary() {
+            var watched = data.Seasons.filter(function (season) { return season.Watched; });
+            if (watched.length === 0) { return null; }
+            var names = function (list) { return list.map(function (season) { return season.Name; }).join(', '); };
+            var unwatched = data.Seasons.filter(function (season) { return !season.Watched; });
+            var which = data.IsMovie ? 'Watched'
+                : data.WatchWhole ? 'Watched: ' + (unwatched.length > 0 ? 'every season except ' + names(unwatched) : 'the whole show') + ', seasons added later included'
+                : 'Watched: ' + names(watched);
+            return h('div', { class: 'watchLine small' }, eye(), h('span', { text: which + '. ' + watchText() }));
+        }
+
         function draw() {
             closeMenu();
             rows = {};
@@ -587,11 +671,15 @@
                     h('div', { class: 'about' },
                         h('h1', { text: data.Name }),
                         h('div', { class: 'muted', text: [data.Year, data.IsMovie ? 'Film' : plural(all.length, 'episode', 'episodes'), have + ' with a ' + data.LanguageName + ' subtitle'].filter(Boolean).join(' · ') }),
-                        h('div', { class: 'muted small', text: data.Sources.length > 0 ? 'Sources: ' + data.Sources.join(', ') + (status.RetimerReady ? ' · Retimed with Retimer API' : ' · Saved as downloaded (Retimer API is off)') : '' }))),
+                        h('div', { class: 'muted small', text: data.Sources.length > 0 ? 'Sources: ' + data.Sources.join(', ') + (status.RetimerReady ? ' · Retimed with Retimer API' : ' · Saved as downloaded (Retimer API is off)') : '' }),
+                        watchSummary())),
                 h('div', { class: 'showTools' },
                     h('div', { class: 'stack' },
                         h('label', { for: 'showLanguage', class: 'muted small', text: 'Subtitle language for this ' + (data.IsMovie ? 'film' : 'show') }),
                         language),
+                    h('div', { class: 'stack watchSwitch', title: data.IsMovie ? 'Gets its subtitle as soon as a source has one.' : 'Each episode without a subtitle gets one as soon as a source has it. Seasons added later are watched too.' },
+                        h('span', { class: 'muted small', text: 'Watch mode' }),
+                        toggle(data.IsMovie ? 'Watch this film' : 'Watch this show', data.WatchWhole, !status.MayFetch || (!status.ModelName && !data.WatchWhole), function (on) { return setWatch(on, null); })),
                     status.MayFetch && status.ModelName && !data.IsMovie && missingAll.length > 0 ? h('button', { class: 'button primary', text: 'Get all missing (' + missingAll.length + ')', on: { click: function () { getAll(all, data.Name); } } }) : null,
                     h('a', { class: 'button quiet', href: base + '/web/#/details?id=' + data.Id, text: 'Open in Jellyfin' })),
                 notices.length > 0 ? h('div', { class: 'section' }, notices.map(function (n) { return h('div', { class: 'notice', text: n }); })) : null);
@@ -604,6 +692,9 @@
                         h('span', { class: 'muted', text: data.IsMovie ? '' : plural(season.Episodes.length, 'episode', 'episodes') }),
                         status.MayFetch && status.ModelName && data.Seasons.length > 1 && missing.length > 0
                             ? h('button', { class: 'button', text: 'Get missing (' + missing.length + ')', on: { click: function () { getAll(season.Episodes, season.Name); } } })
+                            : null,
+                        !data.IsMovie && data.Seasons.length > 1
+                            ? toggle('Watch', season.Watched, !status.MayFetch || (!status.ModelName && !season.Watched), function (on) { return setWatch(on, season); }, 'Watch ' + season.Name)
                             : null));
                 season.Episodes.forEach(function (episode) {
                     rows[episode.Id] = h('div', { class: 'episode' });
@@ -829,6 +920,109 @@
         nofit: 'No file fits', failed: 'Failed', cancelled: 'Cancelled'
     };
 
+    // The two tabs of the activity screen: the jobs, and what watch mode looks for.
+    function activityTabs(watching) {
+        return h('nav', { class: 'tabs inline', 'aria-label': 'Activity' },
+            h('a', { href: '#/activity', text: 'Jobs', class: watching ? null : 'current', 'aria-current': watching ? null : 'page' }),
+            h('a', { href: '#/activity/watching', text: 'Watching', class: watching ? 'current' : null, 'aria-current': watching ? 'page' : null }));
+    }
+
+    var waitTexts = {
+        none: 'No subtitle yet', nofit: 'No file fits yet', failed: 'The last try failed, it is tried again later',
+        queued: 'Queued', working: 'Being fetched now'
+    };
+
+    function watchingScreen() {
+        var mine = routeToken;
+        var list = h('div');
+        var about = h('p', { class: 'muted' });
+        var last = h('p', { class: 'muted small' });
+        var reloadTimer = null;
+        var checkButton = h('button', { class: 'button', text: 'Check now', hidden: true, on: { click: function () {
+            checkButton.disabled = true;
+            say(null);
+            call('/Retimer/Watch/Check', { method: 'POST' }).then(function () {
+                say('The check runs now. The jobs it starts show up under Jobs.', 'info');
+                setTimeout(function () { load().catch(function () {}); pollJobs(); }, 3000);
+            }).catch(function (error) { say(error.message); }).then(function () { checkButton.disabled = false; });
+        } } });
+
+        function stop(ws) {
+            say(null);
+            call('/Retimer/Shows/' + ws.Id + '/Watch', { method: 'PUT', body: { Watch: false } }).then(function () {
+                say('No longer watching ' + ws.Name + '.', 'info');
+                return load();
+            }).catch(function (error) { say(error.message); });
+        }
+
+        function draw(w) {
+            checkButton.hidden = !w.MayCheck;
+            about.textContent = (w.Scheduled
+                ? 'Jellyfin checks the watched shows ' + every(w.EveryHours) + ', and checks a show a few minutes after it gets a new episode. '
+                : 'Jellyfin has no schedule for the check, so a show is only checked a few minutes after it gets a new episode. Set a schedule in Jellyfin\'s dashboard under Scheduled Tasks. ')
+                + (w.Days > 0 ? 'Each episode is looked for for ' + plural(w.Days, 'day', 'days') + '. ' : 'Episodes are looked for for as long as their season is watched. ')
+                + 'A check starts a job only for an episode a source has a new file for.';
+
+            var run = w.LastCheck;
+            last.className = run && run.Problem ? 'warn small' : 'muted small';
+            last.textContent = !run ? 'The check of all watched shows has not run yet.'
+                : 'Last check of all watched shows ' + ago(run.Finished || run.Started) + ': ' + plural(run.Shows, 'show', 'shows') + ', '
+                    + plural(run.LookedFor, 'video', 'videos') + ' without a subtitle looked for, ' + plural(run.JobsStarted, 'job', 'jobs') + ' started.'
+                    + (run.Problem ? ' It stopped early: ' + run.Problem : '');
+
+            list.replaceChildren();
+            if (w.Shows.length === 0) {
+                list.append(h('p', { class: 'muted', text: 'Nothing is watched. Open a show and switch on “Watch this show”, or watch a single season of it.' }));
+            }
+            w.Shows.forEach(function (ws) {
+                var what = ws.IsMovie ? 'Film' : ws.Whole ? (ws.Skipped.length > 0 ? 'Every season except ' + ws.Skipped.join(', ') : 'The whole show') + ', seasons added later included' : ws.Seasons.join(', ');
+                var waiting = ws.Waiting.length === 0
+                    ? h('div', { text: ws.IsMovie ? 'It has a subtitle.' : 'Every watched episode has a subtitle. New ones get theirs when a source has it.' })
+                    : h('div', {},
+                        h('div', { text: ws.IsMovie ? 'Waiting for a subtitle.' : plural(ws.Waiting.length, 'episode waits', 'episodes wait') + ' for a subtitle:' }),
+                        ws.IsMovie ? null : h('ul', { class: 'small waitList' }, ws.Waiting.map(function (wv) {
+                            return h('li', {}, h('span', { class: 'dot ' + wv.State }),
+                                h('span', { text: wv.Label + ' · ' + (waitTexts[wv.State] || wv.State) + (wv.Until ? ' · until ' + day(wv.Until) : '') }));
+                        })));
+                list.append(h('div', { class: 'job' },
+                    h('div', { class: 'poster' }, picture(ws.Id, ws.PosterTag, 120)),
+                    h('div', { class: 'body' },
+                        h('div', { class: 'head' }, eye(), h('a', { href: '#/show/' + ws.Id, text: ws.Name })),
+                        h('div', { class: 'muted small', text: what + ' · ' + ws.LanguageName }),
+                        waiting,
+                        ws.Over > 0 ? h('div', { class: 'muted small', text: plural(ws.Over, 'episode is', 'episodes are') + ' no longer looked for: ' + (ws.Over === 1 ? 'its ' : 'their ') + w.Days + ' days are over.' }) : null),
+                    h('div', { class: 'row' },
+                        status.MayFetch ? h('button', { class: 'button quiet', text: 'Stop watching', on: { click: function () { stop(ws); } } }) : null,
+                        h('a', { class: 'button quiet', href: '#/show/' + ws.Id, text: 'Open show' }))));
+            });
+        }
+
+        function load() {
+            return call('/Retimer/Watch').then(function (w) {
+                if (mine === routeToken) { draw(w); }
+            });
+        }
+
+        document.title = 'Watching · Subtitle Retimer';
+        show(h('div', { class: 'narrow' },
+            h('div', { class: 'row' }, h('h1', { text: 'Activity', class: 'grow' }), checkButton),
+            activityTabs(true),
+            about,
+            last,
+            list));
+
+        // A job that ends changes what is still waited for, so the list is read again, once for a burst of changes.
+        onJobs = function () {
+            clearTimeout(reloadTimer);
+            reloadTimer = setTimeout(function () { load().catch(function () {}); }, 800);
+        };
+        leave = function () { clearTimeout(reloadTimer); };
+        load().catch(function (error) {
+            if (mine === routeToken) { list.replaceChildren(h('p', { class: 'bad', text: error.message })); }
+        });
+        pollJobs();
+    }
+
     function activityScreen() {
         var list = h('div');
         var usage = h('p', { class: 'muted' });
@@ -913,6 +1107,7 @@
         document.title = 'Activity · Subtitle Retimer';
         show(h('div', { class: 'narrow' },
             h('div', { class: 'row' }, h('h1', { text: 'Activity', class: 'grow' }), clear),
+            activityTabs(false),
             h('p', { class: 'muted', text: 'Jobs run one after the other. They keep running when you leave this page.' }),
             usage,
             list));
@@ -1045,6 +1240,8 @@
                 FetchAccess: fields.FetchAccess.value,
                 MaxJobsPerDay: Math.max(0, parseInt(fields.MaxJobsPerDay.value, 10) || 0),
                 MaxCostPerDay: Math.max(0, parseFloat(fields.MaxCostPerDay.value) || 0),
+                WatchNewShows: fields.WatchNewShows.checked,
+                WatchDays: isNaN(parseInt(fields.WatchDays.value, 10)) ? s.WatchDays : Math.max(0, parseInt(fields.WatchDays.value, 10)),
                 ClearSecrets: Object.keys(clearSecrets)
             };
             ['JimakuApiKey', 'OpenSubtitlesApiKey', 'OpenSubtitlesPassword', 'RetimerApiKey', 'OpenRouterApiKey'].forEach(function (name) {
@@ -1093,6 +1290,7 @@
             fields.RetimerUrl = h('input', { type: 'url', value: s.RetimerUrl, placeholder: 'http://192.168.1.10:8000', spellcheck: 'false' });
             fields.MaxJobsPerDay = h('input', { type: 'number', min: '0', step: '1', value: String(s.MaxJobsPerDay) });
             fields.MaxCostPerDay = h('input', { type: 'number', min: '0', step: '0.5', value: String(s.MaxCostPerDay) });
+            fields.WatchDays = h('input', { type: 'number', min: '0', max: '3650', step: '1', value: String(s.WatchDays) });
 
             var retimerHint = h('div', { class: 'hint' });
             var retimerSwitch = check('RetimerEnabled', 'Retime subtitles with Retimer API', null, s.RetimerEnabled);
@@ -1159,7 +1357,7 @@
 
                 h('section', { class: 'panel' },
                     h('h2', { text: 'AI model' }),
-                    h('p', { class: 'hint', text: 'A model chooses whenever the plugin picks by itself: “Get subtitle” and “Get all missing”. It searches the subtitle sources for the show, picks the entry and ranks the files for each episode. After a download it reads a sample of the file and checks that it is in the wanted language. It can only choose among files the sources list, and it never gets the video. The plugin needs a model: without a key and a model it picks no file, and you can only choose files yourself.' }),
+                    h('p', { class: 'hint', text: 'A model chooses whenever the plugin picks by itself: “Get subtitle”, “Get all missing” and watch mode. It searches the subtitle sources for the show, picks the entry and ranks the files for each episode. After a download it reads a sample of the file and checks that it is in the wanted language. It can only choose among files the sources list, and it never gets the video. The plugin needs a model: without a key and a model it picks no file, and you can only choose files yourself.' }),
                     secret('OpenRouterApiKey', 'OpenRouter API key', s.HasOpenRouterApiKey, 'From openrouter.ai. The model\'s calls are billed to this key.'),
                     h('h3', { text: 'Models' }),
                     h('p', { class: 'hint', text: 'The model in use makes the choices. The others stay in the list, so you can switch. “Test” saves the settings and asks the model one small question.' }),
@@ -1195,6 +1393,14 @@
                         { value: 'managers', text: 'Administrators, and users who may manage subtitles in Jellyfin' },
                         { value: 'everyone', text: 'Every signed-in user' }
                     ], s.FetchAccess)),
+
+                h('section', { class: 'panel' },
+                    h('h2', { text: 'Watch mode' }),
+                    h('p', { class: 'hint', text: 'A watched show, season or film gets a subtitle for each video that has none, as soon as a source has one. You switch it on for a show, or for a single season, on the show\'s page. '
+                        + 'Jellyfin checks the watched shows ' + every(s.WatchEveryHours) + ', and checks a show a few minutes after it gets a new episode. You change how often in Jellyfin\'s dashboard, under Scheduled Tasks: “Check watched shows for subtitles”. '
+                        + 'A check starts a job only for a video a source has a new file for, and those jobs count towards the limits below.' }),
+                    check('WatchNewShows', 'Watch new shows', 'Shows that are added to the library from now on are watched by themselves. The shows that are there already stay as they are.', s.WatchNewShows),
+                    field('Days to look for a video\'s subtitle', fields.WatchDays, 'Counted from when the video came into the library, or from when its season was switched to watched, whichever is later. 0 looks for as long as the season is watched.')),
 
                 h('section', { class: 'panel' },
                     h('h2', { text: 'Limits for a day' }),
@@ -1238,6 +1444,7 @@
 
         if (name === 'show' && parts[1]) { showScreen(parts[1]); }
         else if (name === 'pick' && parts[1]) { pickerScreen(parts[1]); }
+        else if (name === 'activity' && parts[1] === 'watching') { watchingScreen(); }
         else if (name === 'activity') { activityScreen(); }
         else if (name === 'settings' && status.IsAdministrator) { settingsScreen(); }
         else { showsScreen(name === 'library' ? parts[1] : null); }

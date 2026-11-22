@@ -7,9 +7,11 @@ using Jellyfin.Plugin.Retimer.Library;
 using Jellyfin.Plugin.Retimer.Picking;
 using Jellyfin.Plugin.Retimer.Retimer;
 using Jellyfin.Plugin.Retimer.Sources;
+using Jellyfin.Plugin.Retimer.Watch;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller;
 using MediaBrowser.Controller.Plugins;
+using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -55,6 +57,18 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
             provider.GetRequiredService<IPluginSettings>(),
             provider.GetRequiredService<ILogger<JobRunner>>()));
         serviceCollection.AddSingleton<JobQueue>();
+        serviceCollection.AddSingleton<IWatchSchedule>(provider => new JellyfinWatchSchedule(provider.GetRequiredService<ITaskManager>()));
+        serviceCollection.AddSingleton(provider => new WatchService(
+            provider.GetRequiredService<IPluginSettings>(),
+            provider.GetRequiredService<IVideoLibrary>(),
+            provider.GetRequiredService<SubtitleSources>(),
+            provider.GetRequiredService<FileFinder>(),
+            provider.GetRequiredService<JobQueue>(),
+            provider.GetRequiredService<PluginStore>(),
+            provider.GetRequiredService<ModelPicker>(),
+            provider.GetRequiredService<IWatchSchedule>(),
+            provider.GetRequiredService<ILogger<WatchService>>()));
+        serviceCollection.AddHostedService<WatchEvents>();
 
         serviceCollection.AddSingleton<ICallerResolver, CallerResolver>();
         serviceCollection.AddSingleton<PageService>();
@@ -62,6 +76,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton(provider => new PluginServices(
             provider.GetRequiredService<PageService>(),
             provider.GetRequiredService<SettingsService>(),
-            provider.GetRequiredService<ICallerResolver>()));
+            provider.GetRequiredService<ICallerResolver>(),
+            provider.GetRequiredService<WatchService>()));
     }
 }

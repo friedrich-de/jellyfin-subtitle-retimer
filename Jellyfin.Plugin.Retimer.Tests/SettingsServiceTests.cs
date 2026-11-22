@@ -22,7 +22,7 @@ public sealed class SettingsServiceTests : IDisposable
 
     public SettingsServiceTests()
     {
-        _service = new SettingsService(_w.Settings, _w.Library, _w.Sources, _w.Picker, _connection, _w.Retimer, _w.Queue);
+        _service = new SettingsService(_w.Settings, _w.Library, _w.Sources, _w.Picker, _connection, _w.Retimer, _w.Queue, _w.Watch, _w.Store);
     }
 
     private static CancellationToken Token => TestContext.Current.CancellationToken;
@@ -240,5 +240,32 @@ public sealed class SettingsServiceTests : IDisposable
 
         _w.Settings.Current.OpenRouterApiKey = string.Empty;
         Assert.Contains("OpenRouter API key first", (await _service.TestAsync("model", "test/model", Token))!.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Watch_mode_keeps_its_days_within_bounds_and_watches_only_shows_that_come_after_it_was_switched_on()
+    {
+        var at = new DateTimeOffset(2026, 11, 2, 8, 0, 0, TimeSpan.Zero);
+        _w.Now = at;
+
+        Assert.NotNull(_service.Save(new SettingsUpdate { WatchDays = -1 }).Error);
+        Assert.NotNull(_service.Save(new SettingsUpdate { WatchDays = 4000 }).Error);
+        Assert.Equal(30, _service.Get().WatchDays);
+        Assert.Equal(3.0, _service.Get().WatchEveryHours);
+
+        var (view, error) = _service.Save(new SettingsUpdate { WatchNewShows = true, WatchDays = 0 });
+        Assert.Null(error);
+        Assert.True(view!.WatchNewShows);
+        Assert.Equal(0, view.WatchDays);
+        Assert.Equal(at, _w.Store.Read(data => data.WatchNewShowsSince));
+
+        // Saving again while it is on keeps the day it was switched on.
+        _w.Now = at.AddDays(2);
+        _service.Save(new SettingsUpdate { WatchNewShows = true, WatchDays = 14 });
+        Assert.Equal(at, _w.Store.Read(data => data.WatchNewShowsSince));
+
+        _service.Save(new SettingsUpdate { WatchNewShows = false });
+        _service.Save(new SettingsUpdate { WatchNewShows = true });
+        Assert.Equal(at.AddDays(2), _w.Store.Read(data => data.WatchNewShowsSince));
     }
 }

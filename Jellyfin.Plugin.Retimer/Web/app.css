@@ -143,6 +143,32 @@ input[type=checkbox], input[type=radio] { width: 18px; height: 18px; accent-colo
 label.check { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; padding: 6px 0; }
 label.check > span { display: block; }
 label.check > span > span { display: block; }
+
+/* An on and off switch: a checkbox drawn as a sliding knob, still a checkbox to the keyboard and screen readers. */
+label.switch { position: relative; display: inline-flex; align-items: center; gap: 10px; cursor: pointer; padding: 4px 0; font-weight: 600; }
+label.switch > input { position: absolute; z-index: 1; opacity: 0; width: 36px; height: 20px; margin: 0; cursor: pointer; }
+label.switch > .track {
+    position: relative; flex: 0 0 auto; width: 36px; height: 20px; border-radius: 100em;
+    background: var(--raised); transition: background .15s;
+}
+label.switch > .track::after {
+    content: ""; position: absolute; left: 3px; top: 3px; width: 14px; height: 14px; border-radius: 50%;
+    background: var(--text); transition: transform .15s;
+}
+label.switch > input:checked + .track { background: var(--primary); }
+label.switch > input:checked + .track::after { transform: translateX(16px); }
+label.switch > input:focus-visible + .track { outline: 2px solid var(--primary); outline-offset: 2px; }
+label.switch.off { cursor: default; opacity: .5; }
+label.switch.off > input { cursor: default; }
+
+/* What is watched: the eye on posters, and the line that says what watch mode does for it. */
+.eye { flex: 0 0 auto; width: 1.15em; height: 1.15em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linejoin: round; }
+.watchLine { display: flex; align-items: flex-start; gap: 6px; margin-top: 4px; }
+.watchLine > .eye { margin-top: .1em; }
+.watchLine > .eye, .job .head > .eye, .sectionHead .eye { color: var(--primary); }
+.watchSwitch { gap: 2px; }
+.waitList { margin: 6px 0 0; padding: 0; list-style: none; }
+.waitList li { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
 .field { display: flex; flex-direction: column; gap: 4px; margin: 14px 0; max-width: 560px; }
 .field > label, .fieldLabel { font-weight: 600; }
 .hint { color: var(--soft); font-size: 90%; }
@@ -151,6 +177,8 @@ label.check > span > span { display: block; }
 .tabs { display: flex; gap: 4px; flex-wrap: wrap; padding: 0 var(--gutter); background: var(--panel); border-top: 1px solid var(--line); }
 .tabs a { padding: 12px 18px; color: var(--soft); font-weight: 600; text-decoration: none; border-bottom: 2px solid transparent; }
 .tabs a.current { color: var(--text); border-bottom-color: var(--primary); }
+.tabs.inline { padding: 0; margin: 14px 0 6px; background: none; border-top: 0; border-bottom: 1px solid var(--line); }
+.tabs.inline a { padding: 10px 16px; }
 .tools { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 18px var(--gutter) 6px; }
 .grid {
     display: grid;
@@ -180,6 +208,7 @@ label.check > span > span { display: block; }
 }
 .badge.done { background: var(--ok); color: #000; }
 .badge.busy { left: 6px; right: auto; background: var(--primary); color: var(--on-primary); }
+.badge.watch { left: 6px; right: auto; top: auto; bottom: 10px; display: flex; padding: 3px 6px; color: var(--primary); }
 .meter { position: absolute; left: 0; right: 0; bottom: 0; height: .28em; background: rgba(0, 0, 0, .5); }
 .meter > i { display: block; height: 100%; background: var(--primary); }
 /* Two lines, so titles that begin alike can be told apart. The space at the sides is for the

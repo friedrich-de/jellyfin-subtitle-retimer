@@ -108,6 +108,15 @@ internal sealed record VideoInfo
     public IReadOnlyList<TrackInfo> Subtitles { get; init; } = [];
 
     public IReadOnlyList<string> AudioLanguages { get; init; } = [];
+
+    /// <summary>Gets when the video came into the library, as far as Jellyfin knows.</summary>
+    public DateTimeOffset? Added { get; init; }
+
+    /// <summary>
+    /// Gets a value indicating whether Jellyfin has read the video's streams yet. Until it has, the video lists
+    /// no subtitle track, also when its file holds one.
+    /// </summary>
+    public bool StreamsRead { get; init; } = true;
 }
 
 internal sealed record SeasonDetails(int? Number, string Name, IReadOnlyList<VideoInfo> Episodes);
@@ -179,4 +188,7 @@ internal interface IVideoLibrary
 
     /// <summary>Tells the library that the videos of a show changed, so cached counts are dropped.</summary>
     void Invalidate();
+
+    /// <summary>The shows (series, not films) of the libraries the page shows that came into the library at or after the given time.</summary>
+    IReadOnlyList<Guid> GetShowsAddedSince(DateTimeOffset since);
 }

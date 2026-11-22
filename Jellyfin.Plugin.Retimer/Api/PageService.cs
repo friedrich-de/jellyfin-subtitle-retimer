@@ -11,6 +11,7 @@ using Jellyfin.Plugin.Retimer.Jobs;
 using Jellyfin.Plugin.Retimer.Library;
 using Jellyfin.Plugin.Retimer.Picking;
 using Jellyfin.Plugin.Retimer.Sources;
+using Jellyfin.Plugin.Retimer.Watch;
 using Microsoft.AspNetCore.Http;
 
 namespace Jellyfin.Plugin.Retimer.Api;
@@ -32,12 +33,14 @@ internal sealed class PageService
     private readonly JobQueue _queue;
     private readonly PluginStore _store;
     private readonly ModelPicker _model;
+    private readonly WatchService _watch;
     private readonly Lock _cacheLock = new();
     private readonly Dictionary<string, SourceEntry> _entries = new(StringComparer.Ordinal);
     private readonly Dictionary<(Guid User, Guid Show), (DateTimeOffset At, bool Visible)> _visible = [];
 
-    public PageService(IPluginSettings settings, IVideoLibrary library, SubtitleSources sources, FileFinder finder, JobQueue queue, PluginStore store, ModelPicker model)
+    public PageService(IPluginSettings settings, IVideoLibrary library, SubtitleSources sources, FileFinder finder, JobQueue queue, PluginStore store, ModelPicker model, WatchService watch)
     {
+        _watch = watch;
         _settings = settings;
         _library = library;
         _sources = sources;
@@ -119,6 +122,10 @@ internal sealed class PageService
         var own = _store.Read(data => data.Shows
             .Where(pair => Languages.Normalize(pair.Value.Language) is not null)
             .ToDictionary(pair => pair.Key, pair => Languages.Normalize(pair.Value.Language)!, StringComparer.Ordinal));
+        var watched = _store.Read(data => data.Shows
+            .Where(pair => WatchService.AnyWatched(pair.Value))
+            .Select(pair => pair.Key)
+            .ToHashSet(StringComparer.Ordinal));
         var fallback = DefaultLanguage;
         string LanguageFor(Guid id) => own.GetValueOrDefault(PluginStore.ShowKey(id)) ?? fallback;
 
@@ -133,7 +140,8 @@ internal sealed class PageService
                 Total = show.Total,
                 Have = show.Have,
                 Language = LanguageFor(show.Id),
-                OwnLanguage = own.ContainsKey(PluginStore.ShowKey(show.Id))
+                OwnLanguage = own.ContainsKey(PluginStore.ShowKey(show.Id)),
+                Watched = watched.Contains(PluginStore.ShowKey(show.Id))
             })
             .ToList();
     }
@@ -146,10 +154,13 @@ internal sealed class PageService
             return null;
         }
 
-        var stored = Languages.Normalize(_store.Show(showId)?.Language);
+        var showRecord = _store.Show(showId);
+        var stored = Languages.Normalize(showRecord?.Language);
         var language = stored ?? DefaultLanguage;
         var active = _queue.Active();
         var retimerReady = JobRunner.RetimerReady(_settings.Current);
+        var watchDays = _settings.Current.WatchDays;
+        var now = _watch.Now;
         var mayFetch = MayFetch(caller);
         var keys = show.Seasons.SelectMany(season => season.Episodes).Select(video => PluginStore.ItemKey(video.Id, language)).ToList();
         var records = _store.Read(data => keys
@@ -168,26 +179,176 @@ internal sealed class PageService
             LanguageName = Languages.NameOf(language),
             OwnLanguage = stored is not null,
             Sources = _sources.ReadyFor(language).Select(source => source.Name).ToList(),
+            WatchWhole = showRecord?.Watch == true,
+            WatchDays = watchDays,
+            WatchEveryHours = _watch.Schedule.Interval?.TotalHours,
             Seasons = show.Seasons
-                .Select(season => new SeasonView(
-                    season.Number,
-                    season.Name,
-                    season.Episodes
-                        .Select(video =>
-                        {
-                            var key = PluginStore.ItemKey(video.Id, language);
-                            return Describe(
-                                video,
-                                language,
-                                records.GetValueOrDefault(key),
-                                active.TryGetValue(key, out var job) ? job : null,
-                                retimerReady,
-                                caller,
-                                mayFetch);
-                        })
-                        .ToList()))
+                .Select(season =>
+                {
+                    var rule = WatchService.Rule(showRecord, season.Number);
+                    return new SeasonView(
+                        season.Number,
+                        season.Name,
+                        season.Episodes
+                            .Select(video =>
+                            {
+                                var key = PluginStore.ItemKey(video.Id, language);
+                                var view = Describe(
+                                    video,
+                                    language,
+                                    records.GetValueOrDefault(key),
+                                    active.TryGetValue(key, out var job) ? job : null,
+                                    retimerReady,
+                                    caller,
+                                    mayFetch);
+                                if (!rule.On || !video.IsLocalFile || WatchService.HasSubtitle(video, language))
+                                {
+                                    return view;
+                                }
+
+                                var until = WatchService.Until(video, rule, watchDays);
+                                return view with { Watched = true, WatchUntil = until, WatchOver = until is { } end && now > end };
+                            })
+                            .ToList())
+                    {
+                        Key = WatchService.SeasonKey(season.Number),
+                        Watched = rule.On
+                    };
+                })
                 .ToList()
         };
+    }
+
+    /// <summary>
+    /// Switches watch mode on or off for a show, a season of it, or a film. Switching on checks it at once.
+    /// </summary>
+    public ServiceError? SetWatch(Caller caller, Guid showId, WatchRequest request)
+    {
+        if (!MayFetch(caller))
+        {
+            return Forbidden;
+        }
+
+        var show = _library.GetShow(caller.UserId, showId);
+        if (show is null)
+        {
+            return new ServiceError(StatusCodes.Status404NotFound, "That show is not in a library you can see.");
+        }
+
+        if (request.Season is null)
+        {
+            _watch.SetShow(showId, request.Watch);
+        }
+        else
+        {
+            if (!WatchService.TryParseSeasonKey(request.Season, out var season) || show.Seasons.All(s => WatchService.SeasonKey(s.Number) != request.Season))
+            {
+                return new ServiceError(StatusCodes.Status400BadRequest, "That show has no such season.");
+            }
+
+            _watch.SetSeason(showId, season, request.Watch);
+        }
+
+        if (request.Watch)
+        {
+            _watch.CheckShowNow(showId);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The watched shows the user can see, with the videos watch mode still looks for, and how the last check went.
+    /// </summary>
+    public WatchView Watching(Caller caller)
+    {
+        var configuration = _settings.Current;
+        var now = _watch.Now;
+        var watched = _store.Read(data => data.Shows
+            .Where(pair => WatchService.AnyWatched(pair.Value))
+            .Select(pair => (pair.Key, Record: pair.Value.Snapshot()))
+            .ToList());
+        var active = _queue.Active();
+        var shows = new List<WatchedShowView>();
+        foreach (var (key, record) in watched)
+        {
+            if (!Guid.TryParseExact(key, "N", out var id) || _library.GetShow(caller.UserId, id) is not { } show)
+            {
+                continue;
+            }
+
+            var language = Languages.Normalize(record.Language) ?? DefaultLanguage;
+            var seasons = new List<string>();
+            var skipped = new List<string>();
+            var waiting = new List<WatchedVideoView>();
+            var over = 0;
+            foreach (var season in show.Seasons)
+            {
+                var rule = WatchService.Rule(record, season.Number);
+                if (!rule.On)
+                {
+                    skipped.Add(season.Name);
+                    continue;
+                }
+
+                seasons.Add(season.Name);
+                foreach (var video in season.Episodes.Where(video => video.IsLocalFile && !WatchService.HasSubtitle(video, language)))
+                {
+                    var until = WatchService.Until(video, rule, configuration.WatchDays);
+                    if (until is { } end && now > end)
+                    {
+                        over++;
+                        continue;
+                    }
+
+                    var item = _store.Item(video.Id, language);
+                    var state = active.TryGetValue(PluginStore.ItemKey(video.Id, language), out var job)
+                        ? job.Job.State
+                        : item?.LastError is not null ? "failed" : item is { NoFit: true } ? "nofit" : "none";
+                    waiting.Add(new WatchedVideoView(video.Id, Label(video), state, until));
+                }
+            }
+
+            shows.Add(new WatchedShowView
+            {
+                Id = show.Id,
+                Name = show.Name,
+                IsMovie = show.IsMovie,
+                PosterTag = show.PosterTag,
+                LanguageName = Languages.NameOf(language),
+                Whole = record.Watch == true,
+                Seasons = seasons,
+                Skipped = skipped,
+                Waiting = waiting,
+                Over = over
+            });
+        }
+
+        var last = _watch.LastRun();
+        return new WatchView
+        {
+            Shows = shows.OrderBy(show => show.Name, StringComparer.OrdinalIgnoreCase).ToList(),
+            LastCheck = last is null ? null : new WatchRunView(last.Started, last.Finished, last.Shows, last.LookedFor, last.JobsStarted, last.Problem),
+            EveryHours = _watch.Schedule.Interval?.TotalHours,
+            Scheduled = _watch.Schedule.Scheduled,
+            Days = configuration.WatchDays,
+            NewShows = configuration.WatchNewShows,
+            MayCheck = caller.IsAdministrator
+        };
+    }
+
+    /// <summary>
+    /// Has Jellyfin run the check of all watched shows now. Only administrators may.
+    /// </summary>
+    public ServiceError? CheckWatchedNow(Caller caller)
+    {
+        if (!caller.IsAdministrator)
+        {
+            return new ServiceError(StatusCodes.Status403Forbidden, "Only an administrator can start the check.");
+        }
+
+        _watch.Schedule.RunNow();
+        return null;
     }
 
     public ServiceError? SetLanguage(Caller caller, Guid showId, string? language)
@@ -677,8 +838,12 @@ internal sealed class PageService
     private static bool SamePath(string? a, string? b) =>
         !string.IsNullOrEmpty(a) && !string.IsNullOrEmpty(b) && string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.Ordinal);
 
+    /// <summary>
+    /// A job may be cancelled by whoever started it and by administrators. A job of watch mode belongs to
+    /// nobody in particular, so everyone who may fetch may cancel it.
+    /// </summary>
     private static bool MayCancel(Caller caller, Job job, bool mayFetch) =>
-        JobState.IsActive(job.State) && mayFetch && (caller.IsAdministrator || job.StartedById == caller.UserId);
+        JobState.IsActive(job.State) && mayFetch && (caller.IsAdministrator || job.StartedById == caller.UserId || job.StartedById == Guid.Empty);
 
     private static JobView View(Job job, int position, Caller caller, bool mayFetch)
     {

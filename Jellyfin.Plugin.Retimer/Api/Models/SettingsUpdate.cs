@@ -87,6 +87,12 @@ public sealed class SettingsUpdate
     /// <summary>Gets or sets how much the services may cost on one day, in US dollars. 0 means no limit.</summary>
     public double? MaxCostPerDay { get; set; }
 
+    /// <summary>Gets or sets a value indicating whether shows that come into the library from now on are watched by themselves.</summary>
+    public bool? WatchNewShows { get; set; }
+
+    /// <summary>Gets or sets for how many days watch mode looks for an episode's subtitle. 0 means for as long as the season is watched.</summary>
+    public int? WatchDays { get; set; }
+
     /// <summary>
     /// Gets or sets the stored keys and passwords to remove, by the names of their settings, such as <c>JimakuApiKey</c>.
     /// </summary>

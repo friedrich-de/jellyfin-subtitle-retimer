@@ -235,6 +235,63 @@ public class RetimerController : ControllerBase
     }
 
     /// <summary>
+    /// Switches watch mode on or off for a show, one of its seasons, or a film. A watched video that has no
+    /// subtitle gets one as soon as a source has it.
+    /// </summary>
+    /// <param name="showId">The show or film.</param>
+    /// <param name="request">On or off, and the season, or none for the whole show.</param>
+    /// <returns>Nothing.</returns>
+    [HttpPut("Shows/{showId:guid}/Watch")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult> SetWatch([FromRoute] Guid showId, [FromBody] WatchRequest request)
+    {
+        var caller = await CallerAsync().ConfigureAwait(false);
+        if (caller is null)
+        {
+            return NoUser();
+        }
+
+        var error = _services.Page.SetWatch(caller, showId, request);
+        return error is null ? NoContent() : Refuse(error);
+    }
+
+    /// <summary>
+    /// Lists the watched shows the user can see, the videos watch mode still looks for, and the last check.
+    /// </summary>
+    /// <returns>The watched shows.</returns>
+    [HttpGet("Watch")]
+    [Produces(MediaTypeNames.Application.Json)]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult> GetWatching()
+    {
+        var caller = await CallerAsync().ConfigureAwait(false);
+        return caller is null ? NoUser() : Ok(_services.Page.Watching(caller));
+    }
+
+    /// <summary>
+    /// Has Jellyfin check all watched shows now, instead of at the next scheduled time. Only administrators may.
+    /// </summary>
+    /// <returns>Nothing: the check runs in the background.</returns>
+    [HttpPost("Watch/Check")]
+    [ProducesResponseType(StatusCodes.Status202Accepted)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    public async Task<ActionResult> CheckWatched()
+    {
+        var caller = await CallerAsync().ConfigureAwait(false);
+        if (caller is null)
+        {
+            return NoUser();
+        }
+
+        var error = _services.Page.CheckWatchedNow(caller);
+        return error is null ? Accepted() : Refuse(error);
+    }
+
+    /// <summary>
     /// Lists the jobs that changed since the page last asked.
     /// </summary>
     /// <param name="since">The counter of the last answer, or 0 for every job.</param>

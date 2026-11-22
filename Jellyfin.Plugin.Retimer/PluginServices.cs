@@ -1,4 +1,5 @@
 using Jellyfin.Plugin.Retimer.Api;
+using Jellyfin.Plugin.Retimer.Watch;
 
 namespace Jellyfin.Plugin.Retimer;
 
@@ -7,11 +8,12 @@ namespace Jellyfin.Plugin.Retimer;
 /// </summary>
 public sealed class PluginServices
 {
-    internal PluginServices(PageService page, SettingsService settings, ICallerResolver callers)
+    internal PluginServices(PageService page, SettingsService settings, ICallerResolver callers, WatchService watch)
     {
         Page = page;
         Settings = settings;
         Callers = callers;
+        Watch = watch;
     }
 
     internal PageService Page { get; }
@@ -19,4 +21,6 @@ public sealed class PluginServices
     internal SettingsService Settings { get; }
 
     internal ICallerResolver Callers { get; }
+
+    internal WatchService Watch { get; }
 }

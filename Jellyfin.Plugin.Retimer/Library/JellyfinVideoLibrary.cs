@@ -603,6 +603,20 @@ internal sealed class JellyfinVideoLibrary : IVideoLibrary
         }
     }
 
+    public IReadOnlyList<Guid> GetShowsAddedSince(DateTimeOffset since)
+    {
+        var found = new List<Guid>();
+        foreach (var library in GetLibraries(Guid.Empty).Where(library => library.Kind != "movies"))
+        {
+            var query = Query(null, library.Id, BaseItemKind.Series);
+            query.MinDateCreated = since.UtcDateTime;
+            query.DtoOptions = new DtoOptions(false);
+            found.AddRange(_libraryManager.GetItemList(query).Select(item => item.Id));
+        }
+
+        return found.Distinct().ToList();
+    }
+
     private static InternalItemsQuery Query(User? user, Guid libraryId, BaseItemKind kind)
     {
         var query = user is null ? new InternalItemsQuery() : new InternalItemsQuery(user);
@@ -849,7 +863,11 @@ internal sealed class JellyfinVideoLibrary : IVideoLibrary
                 .Where(stream => stream.Type == MediaStreamType.Audio)
                 .Select(stream => Languages.NameOf(stream.Language))
                 .Distinct(StringComparer.Ordinal)
-                .ToList()
+                .ToList(),
+            Added = video.DateCreated == default ? null : new DateTimeOffset(DateTime.SpecifyKind(video.DateCreated, DateTimeKind.Utc)),
+
+            // Every video file Jellyfin has read holds a picture or a sound stream. One without either is not read yet.
+            StreamsRead = streams.Any(stream => stream.Type is MediaStreamType.Video or MediaStreamType.Audio)
         };
     }
 

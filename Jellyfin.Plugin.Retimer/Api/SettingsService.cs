@@ -13,6 +13,7 @@ using Jellyfin.Plugin.Retimer.Library;
 using Jellyfin.Plugin.Retimer.Picking;
 using Jellyfin.Plugin.Retimer.Retimer;
 using Jellyfin.Plugin.Retimer.Sources;
+using Jellyfin.Plugin.Retimer.Watch;
 using Microsoft.AspNetCore.Http;
 
 namespace Jellyfin.Plugin.Retimer.Api;
@@ -79,6 +80,13 @@ internal sealed record SettingsView
 
     public double MaxCostPerDay { get; init; }
 
+    public bool WatchNewShows { get; init; }
+
+    public int WatchDays { get; init; }
+
+    /// <summary>Gets how many hours Jellyfin's schedule leaves between two checks of the watched shows, or <c>null</c> without such a schedule.</summary>
+    public double? WatchEveryHours { get; init; }
+
     public IReadOnlyList<LanguageView> Languages { get; init; } = [];
 
     public IReadOnlyList<SourceView> Sources { get; init; } = [];
@@ -112,10 +120,14 @@ internal sealed partial class SettingsService
     private readonly IRetimerClient _retimerClient;
     private readonly IRetimerApi _retimerApi;
     private readonly JobQueue _queue;
+    private readonly WatchService _watch;
+    private readonly PluginStore _store;
 
-    public SettingsService(IPluginSettings settings, IVideoLibrary library, SubtitleSources sources, ModelPicker model, IRetimerClient retimerClient, IRetimerApi retimerApi, JobQueue queue)
+    public SettingsService(IPluginSettings settings, IVideoLibrary library, SubtitleSources sources, ModelPicker model, IRetimerClient retimerClient, IRetimerApi retimerApi, JobQueue queue, WatchService watch, PluginStore store)
     {
         _queue = queue;
+        _watch = watch;
+        _store = store;
         _settings = settings;
         _library = library;
         _sources = sources;
@@ -157,6 +169,9 @@ internal sealed partial class SettingsService
             FetchAccess = c.FetchAccess,
             MaxJobsPerDay = c.MaxJobsPerDay,
             MaxCostPerDay = c.MaxCostPerDay,
+            WatchNewShows = c.WatchNewShows,
+            WatchDays = c.WatchDays,
+            WatchEveryHours = _watch.Schedule.Interval?.TotalHours,
             Languages = Languages.All.Select(l => new LanguageView(l.Code, l.Name)).ToList(),
             Sources = _sources.All.Select(s => new SourceView(s.Id, s.Name, s.IsReady)).ToList()
         };
@@ -302,6 +317,16 @@ internal sealed partial class SettingsService
             c.MaxCostPerDay = Math.Round(cost, 2);
         }
 
+        if (update.WatchDays is { } watchDays)
+        {
+            if (watchDays is < 0 or > 3650)
+            {
+                return (null, Bad("Watch mode looks for between 0 and 3650 days. 0 means for as long as the season is watched."));
+            }
+
+            c.WatchDays = watchDays;
+        }
+
         if (update.OpenSubtitlesUsername is not null)
         {
             var name = update.OpenSubtitlesUsername.Trim();
@@ -322,6 +347,8 @@ internal sealed partial class SettingsService
         c.RemoveSignsAndCredits = update.RemoveSignsAndCredits ?? c.RemoveSignsAndCredits;
         c.RemoveSymbols = update.RemoveSymbols ?? c.RemoveSymbols;
         c.RemoveStyling = update.RemoveStyling ?? c.RemoveStyling;
+        var watchNewShowsFrom = update.WatchNewShows == true && !c.WatchNewShows ? _watch.Now : (DateTimeOffset?)null;
+        c.WatchNewShows = update.WatchNewShows ?? c.WatchNewShows;
 
         if (update.HiddenLibraryIds is not null)
         {
@@ -362,6 +389,12 @@ internal sealed partial class SettingsService
         c.OpenRouterApiKey = Secret(nameof(c.OpenRouterApiKey), update.OpenRouterApiKey, c.OpenRouterApiKey);
 
         _settings.Save(c);
+        if (watchNewShowsFrom is { } from)
+        {
+            // Only shows that come into the library from now on are watched by themselves, not the whole library.
+            _store.Update(data => data.WatchNewShowsSince = from);
+        }
+
         _library.Invalidate();
         return (Get(), null);
     }

@@ -69,6 +69,9 @@ internal sealed record ShowView
 
     /// <summary>Gets a value indicating whether the show has its own subtitle language.</summary>
     public bool OwnLanguage { get; init; }
+
+    /// <summary>Gets a value indicating whether the show, one of its seasons, or the film is watched.</summary>
+    public bool Watched { get; init; }
 }
 
 internal sealed record EpisodeView
@@ -113,9 +116,25 @@ internal sealed record EpisodeView
     public string? Source { get; init; }
 
     public string? PickedBy { get; init; }
+
+    /// <summary>Gets a value indicating whether watch mode looks for this video's subtitle: its season is watched and it has none.</summary>
+    public bool Watched { get; init; }
+
+    /// <summary>Gets until when watch mode looks for it, or <c>null</c> when it looks for as long as the season is watched.</summary>
+    public DateTimeOffset? WatchUntil { get; init; }
+
+    /// <summary>Gets a value indicating whether watch mode no longer looks for it, because its days are over.</summary>
+    public bool WatchOver { get; init; }
 }
 
-internal sealed record SeasonView(int? Number, string Name, IReadOnlyList<EpisodeView> Episodes);
+internal sealed record SeasonView(int? Number, string Name, IReadOnlyList<EpisodeView> Episodes)
+{
+    /// <summary>Gets the key that names the season when it is switched to watched: its number, or "-".</summary>
+    public string Key { get; init; } = "-";
+
+    /// <summary>Gets a value indicating whether the season is watched, on its own or with the whole show.</summary>
+    public bool Watched { get; init; }
+}
 
 internal sealed record ShowDetailView
 {
@@ -141,6 +160,78 @@ internal sealed record ShowDetailView
     public IReadOnlyList<string> Sources { get; init; } = [];
 
     public IReadOnlyList<SeasonView> Seasons { get; init; } = [];
+
+    /// <summary>Gets a value indicating whether the whole show is watched, seasons added later included, or the film.</summary>
+    public bool WatchWhole { get; init; }
+
+    /// <summary>Gets for how many days watch mode looks for an episode's subtitle. 0 means for as long as the season is watched.</summary>
+    public int WatchDays { get; init; }
+
+    /// <summary>Gets how many hours pass between two scheduled checks of the watched shows, or <c>null</c> without such a schedule.</summary>
+    public double? WatchEveryHours { get; init; }
+}
+
+/// <summary>
+/// An episode or film of a watched season that has no subtitle yet.
+/// </summary>
+/// <param name="Id">The video.</param>
+/// <param name="Label">Its season, number and name.</param>
+/// <param name="State">One of <c>none</c>, <c>nofit</c>, <c>failed</c>, <c>queued</c>, <c>working</c>.</param>
+/// <param name="Until">Until when watch mode looks for it, or <c>null</c> for as long as the season is watched.</param>
+internal sealed record WatchedVideoView(Guid Id, string Label, string State, DateTimeOffset? Until);
+
+internal sealed record WatchedShowView
+{
+    public Guid Id { get; init; }
+
+    public string Name { get; init; } = string.Empty;
+
+    public bool IsMovie { get; init; }
+
+    public string? PosterTag { get; init; }
+
+    public string LanguageName { get; init; } = string.Empty;
+
+    /// <summary>Gets a value indicating whether the whole show is watched, seasons added later included.</summary>
+    public bool Whole { get; init; }
+
+    /// <summary>Gets the names of the watched seasons.</summary>
+    public IReadOnlyList<string> Seasons { get; init; } = [];
+
+    /// <summary>Gets the names of the seasons that are not watched.</summary>
+    public IReadOnlyList<string> Skipped { get; init; } = [];
+
+    /// <summary>Gets the videos watch mode still looks for.</summary>
+    public IReadOnlyList<WatchedVideoView> Waiting { get; init; } = [];
+
+    /// <summary>Gets how many videos without a subtitle watch mode no longer looks for, because their days are over.</summary>
+    public int Over { get; init; }
+}
+
+internal sealed record WatchRunView(DateTimeOffset Started, DateTimeOffset? Finished, int Shows, int LookedFor, int JobsStarted, string? Problem);
+
+/// <summary>
+/// The "Watching" tab of the activity screen.
+/// </summary>
+internal sealed record WatchView
+{
+    public IReadOnlyList<WatchedShowView> Shows { get; init; } = [];
+
+    /// <summary>Gets how the last check of all watched shows went, or <c>null</c> before the first.</summary>
+    public WatchRunView? LastCheck { get; init; }
+
+    /// <summary>Gets how many hours pass between two scheduled checks, or <c>null</c> without such a schedule.</summary>
+    public double? EveryHours { get; init; }
+
+    /// <summary>Gets a value indicating whether Jellyfin runs the check by itself at all.</summary>
+    public bool Scheduled { get; init; }
+
+    public int Days { get; init; }
+
+    public bool NewShows { get; init; }
+
+    /// <summary>Gets a value indicating whether the user may start a check now.</summary>
+    public bool MayCheck { get; init; }
 }
 
 internal sealed record TriedView(string Name, string Reason);

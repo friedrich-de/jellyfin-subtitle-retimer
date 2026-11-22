@@ -82,7 +82,8 @@ Without Retimer API the plugin still finds, checks and saves subtitles; it just 
 | Your shows | `http://<your Jellyfin>/Retimer`. The libraries, shows and films your Jellyfin user may see, each with how many videos have a subtitle. |
 | A show | Its episodes with their state: no subtitle, a subtitle saved by the plugin (retimed or not), a subtitle that was already there. "Get subtitle" on one episode, "Get all missing" for the show. |
 | Choose a file | Every file the sources list for the show, the ones for this episode first. For when the plugin's own choice is wrong, or to search a source under another title. |
-| Activity | The jobs, one after the other, with their steps, their result and what they cost. |
+| Activity | The jobs, one after the other, with their steps, their result and what they cost. A second tab, Watching, lists what watch mode looks for. |
+| Watch mode | A switch on a show's page: the show, a single season of it, or a film gets its subtitles by itself, as soon as a source has them. |
 | Settings | Sources and their keys, Retimer API, the AI model, which libraries appear, who may fetch, and limits for a day. Administrators only. |
 
 ### How a subtitle is fetched
@@ -122,6 +123,33 @@ It is **off until you switch it on**; without it a subtitle is saved as download
 
 The subtitle language is one setting for the server, and each show can use another one, set on the
 show's page.
+
+### Watch mode
+
+A show that is still airing gets a new episode each week, and the source gets its subtitle some
+hours or days later. Watch mode fetches those subtitles by themselves.
+
+- **Switch it on** on a show's page: "Watch this show" watches every season, seasons added later
+  included. A show with more than one season has a "Watch" switch on each season too, so you can
+  watch only the season that airs, or leave one out. A film has "Watch this film". A watched show
+  has an eye on its poster.
+- **What it does.** Jellyfin runs the check "Check watched shows for subtitles" every 3 hours. It is
+  one of Jellyfin's own tasks (Dashboard → Scheduled Tasks), where an administrator sees when it ran
+  and can change how often. A show is also checked a few minutes after Jellyfin adds a new episode
+  to it, and right away when it is switched on. For each watched episode without a subtitle, the
+  check asks the sources whether they list a file for it that was not tried yet, and starts a job
+  only then. A check that finds nothing new starts no job, and costs a model call only when the
+  sources list new files.
+- **How long.** An episode is looked for for 30 days after it came into the library, or after its
+  season was switched on, whichever is later. The number is in the settings, and 0 means for as
+  long as the season is watched. After a failed job, watch mode waits 20 hours before it tries
+  that episode again.
+- **Watching**, the second tab of Activity, lists the watched shows with the episodes that still
+  wait, and how the last check went. Administrators can start the check there.
+- **Watch new shows**, in the settings, watches every show that comes into the library from then on.
+- The jobs of watch mode count toward the day's limits like any other, and say "Watch mode" as who
+  started them. When a limit is reached the check stops and says so. Whoever may get subtitles may
+  switch watch mode, and cancel its jobs.
 
 ### What leaves your server
 
@@ -180,9 +208,9 @@ and to its settings. To put the page in the side menu for everyone, an administr
 | --- | --- | --- | --- | --- |
 | The page and its files, app manifest, icons and service worker (no data in them) | yes | yes | yes | yes |
 | See shows, episodes, states and jobs of what Jellyfin lets them see | no | yes | yes | yes |
-| Get, choose, retime or remove a subtitle, set a show's language | no | no | yes | yes |
+| Get, choose, retime or remove a subtitle, set a show's language, watch a show or a season | no | no | yes | yes |
 | See today's use and what a job cost | no | no | yes | yes |
-| Settings, connection checks, clearing the activity list | no | no | no | yes |
+| Settings, connection checks, clearing the activity list, starting the watch check | no | no | no | yes |
 
 "May manage subtitles" is the right of that name in a Jellyfin user's profile. The setting "Who may
 fetch" can open fetching to every signed-in user. A job can be cancelled by whoever started it and
@@ -200,7 +228,6 @@ never return a key: the settings say only whether one is stored.
 
 ## Not in this version
 
-- A watch mode that fetches subtitles for new episodes by itself.
 - More sources. SubDL was looked at and left out, because its API could not be verified.
 - OpenSubtitles is built from its published API description and from open-source clients. It has
   unit tests, and has not run against the live service yet.
@@ -221,7 +248,9 @@ packs the plugin, starts a throwaway server on a free local port, installs the p
 plugin repository through Jellyfin's installer and restarts the server. It makes three small
 episodes with ffmpeg, two of them with two English subtitle tracks, and gives them to the server as
 a library. Then it calls the endpoints as nobody, as a normal user and as an administrator, and
-fetches, retimes, saves and removes a subtitle. To use a Jellyfin that is already installed:
+fetches, retimes, saves and removes a subtitle. A second throwaway server checks watch mode: a
+watched season, Jellyfin's scheduled task, and a new episode that gets its subtitle by itself. To
+use a Jellyfin that is already installed:
 
 ```sh
 RETIMER_E2E_JELLYFIN=/usr/bin/jellyfin RETIMER_E2E_JELLYFIN_WEB=/usr/share/jellyfin/web \
@@ -232,8 +261,9 @@ The throwaway server calls no outside service. The tests play Jimaku, OpenRouter
 themselves on a local port, in the shapes of those services' published API descriptions, and point
 the plugin at them with the environment variables `RETIMER_JIMAKU_API_URL` and
 `RETIMER_OPENROUTER_API_URL` and with the address of Retimer API in the settings.
-`RETIMER_OPENSUBTITLES_API_URL` does the same for OpenSubtitles. These variables exist for tests
-only: the plugin reads them once at start. Leave them unset on a real server.
+`RETIMER_OPENSUBTITLES_API_URL` does the same for OpenSubtitles, and `RETIMER_WATCH_DELAY_SECONDS`
+shortens the wait before watch mode checks a show with a new episode. These variables exist for
+tests only: the plugin reads them once at start. Leave them unset on a real server.
 
 The page itself was checked by hand in Chromium against the same kind of server; no test opens a
 browser.
@@ -272,7 +302,7 @@ built against. A plugin built for 12.4 does not load on Jellyfin 10.11, which ru
 
 | Path | Content |
 | --- | --- |
-| `Jellyfin.Plugin.Retimer/` | The plugin: `Configuration/` (settings), `Sources/` and `Jimaku/` (subtitle sources), `Picking/` (model, rules, language check), `Retimer/` (Retimer API client), `Library/` (what the plugin reads from and writes to Jellyfin), `Jobs/` (the job, the queue, what is remembered), `Api/` (endpoints), `Web/` (the page) |
+| `Jellyfin.Plugin.Retimer/` | The plugin: `Configuration/` (settings), `Sources/` and `Jimaku/` (subtitle sources), `Picking/` (model, rules, language check), `Retimer/` (Retimer API client), `Library/` (what the plugin reads from and writes to Jellyfin), `Jobs/` (the job, the queue, what is remembered), `Watch/` (watch mode and its scheduled task), `Api/` (endpoints), `Web/` (the page) |
 | `Jellyfin.Plugin.Retimer.Tests/` | Unit tests. Nothing in them leaves the process. |
 | `Jellyfin.Plugin.Retimer.E2E/` | End-to-end tests against a real server |
 | `dev/` | `package.sh`, `e2e.sh`, `render-icons.js` (the page's PNG icons from their SVG files) |

@@ -9,6 +9,49 @@ video. Jellyfin lists the new subtitle at once, without a library scan.
 
 It builds for **Jellyfin 12.4** (.NET 10) and installs through Jellyfin's own plugin installer.
 
+![The plugin's page: the shows of a library with their posters, and how many episodes of each still have no subtitle](docs/screenshots/01-shows.webp)
+
+## Getting a subtitle
+
+**1. Open a show.** Each episode says what it has. "Get subtitle" fetches one episode, "Get missing"
+the rest of the season.
+
+![Season 2 of Fate/Zero: episodes 1 to 4 have a Japanese subtitle that was retimed, episodes 5 and 6 have none and offer "Get subtitle"](docs/screenshots/02-episodes.webp)
+
+**2. The plugin does the rest.** It searches the sources, a model picks the file, and Retimer API
+times it against the video's own English track. The row shows each step, and the job goes on when
+you leave the page.
+
+![Episode 5 while its job runs: "Retiming, Retimer API: matching", with a progress bar and a Cancel button](docs/screenshots/04-working.webp)
+
+**3. Done.** The subtitle is saved next to the video and Jellyfin lists it at once. The row says
+where the file came from, which model picked it, and how it was moved: here in three parts, by up
+to a second, about 30 seconds after the click and for a tenth of a cent.
+
+![Episode 5 now has a Japanese subtitle, retimed against the English track "Dialog - ENG", moved in 3 parts by up to 1.0 s](docs/screenshots/06-episode-done.webp)
+
+<details>
+<summary>More: choosing the file yourself, the activity list, a phone</summary>
+
+**Choose a subtitle** lists every file the sources have for the episode, best first, with the one
+the model would take marked. Save it as it is, or retimed.
+
+![Choose a subtitle for episode 5: the Jimaku entry and its files, the first one suggested by Haiku 5.5](docs/screenshots/03-choose.webp)
+
+**Activity** lists the jobs with their result and what they cost, and what is left of the day's
+limits.
+
+![Activity: the job saved and retimed, started by the user viewer, cost $0.001](docs/screenshots/05-done.webp)
+
+The page fits a phone, and can be installed as an app.
+
+<img src="docs/screenshots/07-phone.webp" alt="The episode list on a phone" width="300">
+
+</details>
+
+The screenshots are of Jellyfin 12.4 with version 0.5.0.0 of the plugin, Jimaku as the source and
+Retimer API switched on.
+
 ## Install
 
 1. In Jellyfin, open Dashboard → Plugins → Manage Repositories and add a new repository: the name
@@ -234,6 +277,7 @@ built against. A plugin built for 12.4 does not load on Jellyfin 10.11, which ru
 | `Jellyfin.Plugin.Retimer.E2E/` | End-to-end tests against a real server |
 | `dev/` | `package.sh`, `e2e.sh`, `render-icons.js` (the page's PNG icons from their SVG files) |
 | `repository/` | The public plugin repository: `manifest.json` and the zip of each released version |
+| `docs/screenshots/` | The pictures in this README |
 
 ## Licence
 

@@ -143,8 +143,9 @@ hours or days later. Watch mode fetches those subtitles by themselves.
   and can change how often. A show is also checked a few minutes after Jellyfin adds a new episode
   to it, and right away when it is switched on. For each watched episode without a subtitle, the
   check asks the sources whether they list a file for it that was not tried yet, and starts a job
-  only then. A check that finds nothing new starts no job, and costs a model call only when the
-  sources list new files.
+  only then. A check that finds nothing new starts no job. It asks the model only when the sources
+  list new files, or once after a new episode, to confirm the source's entry for its season (about
+  0.2 cents).
 - **How long.** An episode is looked for for 30 days after it came into the library, or after its
   season was switched on, whichever is later. The number is in the settings, and 0 means for as
   long as the season is watched. After a failed job, watch mode waits 20 hours before it tries

@@ -65,6 +65,12 @@ internal sealed class JimakuSource : ISubtitleSource
                     await AddAsync(found, new JimakuEntryQuery { TmdbId = id, Anime = false }, cancellationToken).ConfigureAwait(false);
                 }
 
+                // A season with a name of its own, such as an arc's, is often a separate entry, or several, under that name.
+                if (!video.IsMovie && !string.IsNullOrWhiteSpace(video.SeasonName) && !string.IsNullOrWhiteSpace(video.Title))
+                {
+                    await AddAsync(found, new JimakuEntryQuery { Title = video.Title + " " + video.SeasonName }, cancellationToken).ConfigureAwait(false);
+                }
+
                 foreach (var name in new[] { video.Title, video.OriginalTitle }.Where(n => !string.IsNullOrWhiteSpace(n)).Distinct(StringComparer.OrdinalIgnoreCase))
                 {
                     var before = found.Count;
@@ -94,7 +100,8 @@ internal sealed class JimakuSource : ISubtitleSource
                 AnilistId = entry.AnilistId,
                 TmdbId = entry.TmdbId,
                 IsMovie = entry.Flags.Movie,
-                LastModified = entry.LastModified
+                LastModified = entry.LastModified,
+                Notes = entry.Notes
             })
             .ToList();
     }

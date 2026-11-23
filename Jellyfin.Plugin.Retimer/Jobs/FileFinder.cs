@@ -19,12 +19,13 @@ namespace Jellyfin.Plugin.Retimer.Jobs;
 /// </summary>
 /// <param name="Source">The source's id.</param>
 /// <param name="Name">The source's name.</param>
-/// <param name="EntryId">The entry that was used, for a source with entries.</param>
+/// <param name="EntryId">The entry that was used, for a source with entries: the first when there are several.</param>
 /// <param name="EntryName">That entry's name.</param>
 /// <param name="Files">How many files the source listed.</param>
 /// <param name="MatchedBy">Who matched the show to the entry: a model's name, "the rules" or "you".</param>
 /// <param name="Problem">Why the source gave nothing, when it failed.</param>
-internal sealed record SourceReport(string Source, string Name, string? EntryId, string? EntryName, int Files, string? MatchedBy, string? Problem);
+/// <param name="EntryNames">The names of all entries that were used, in airing order, when the source splits the season over several.</param>
+internal sealed record SourceReport(string Source, string Name, string? EntryId, string? EntryName, int Files, string? MatchedBy, string? Problem, IReadOnlyList<string>? EntryNames = null);
 
 /// <summary>
 /// The files found for a video, best first, and how they were found.
@@ -94,9 +95,11 @@ internal sealed class FileFinder
         Year = video.Year,
         IsMovie = video.IsMovie,
         Season = video.Season,
+        SeasonName = video.SeasonName,
         Episode = video.Episode,
         AbsoluteEpisode = video.AbsoluteEpisode,
         EpisodeTitle = video.IsMovie ? null : video.Name,
+        Aired = video.Aired,
         VideoFileName = video.FileName,
         AnilistId = video.AnilistId,
         TmdbId = video.TmdbId,
@@ -141,6 +144,8 @@ internal sealed class FileFinder
         var candidates = new List<Candidate>();
         var all = new List<SourceFile>();
 
+        IReadOnlyList<SeasonEpisode>? seasonEpisodes = null;
+
         FindResult Stopped() => new() { Sources = reports, CostUsd = cost, ModelProblem = modelProblem, NeedsChoice = true };
 
         if (modelProblem is not null && !byHand)
@@ -156,18 +161,24 @@ internal sealed class FileFinder
                 string? entryId = null;
                 string? entryName = null;
                 string? matchedBy = null;
+                IReadOnlyList<EntryRef> parts = [];
 
                 if (source.HasEntries)
                 {
                     var key = MatchKey(source.Id, video, language);
                     var match = _store.Show(video.ShowId)?.Matches.GetValueOrDefault(key);
                     var age = match is null ? TimeSpan.MaxValue : DateTimeOffset.UtcNow - match.At;
+                    seasonEpisodes ??= video.IsMovie ? [] : _library.GetSeasonEpisodes(video.Id);
+                    var upTo = seasonEpisodes.Count == 0 ? 0 : seasonEpisodes.Max(e => e.Number);
 
-                    // A match "by the rules" is from a version that picked without a model. It is asked again.
+                    // A match "by the rules" is from a version that picked without a model, and a model's answer to an
+                    // older question may have missed a season the source splits into parts. Both are asked again.
                     var stale = match is null
                         || (match.By != "user" && age > _matchLifetime)
                         || (match.EntryId.Length == 0 && age > _noMatchLifetime)
-                        || match.By == "rules";
+                        || match.By == "rules"
+                        || (match.By == "model" && match.Question < EntryMatch.CurrentQuestion)
+                        || (match.By == "model" && upTo > match.UpTo);
 
                     if (stale && modelProblem is null)
                     {
@@ -175,12 +186,17 @@ internal sealed class FileFinder
                         note(model!.Name + " is looking for the show on " + source.Name);
                         try
                         {
-                            var choice = await _model.ChooseEntryAsync(query, source, entries, cancellationToken).ConfigureAwait(false);
+                            var choice = await _model.ChooseEntryAsync(query, seasonEpisodes, source, entries, cancellationToken).ConfigureAwait(false);
                             cost += choice.CostUsd;
+                            var first = choice.Entries.Count > 0 ? choice.Entries[0] : null;
                             match = new EntryMatch
                             {
-                                EntryId = choice.Entry?.Id ?? string.Empty,
-                                EntryName = choice.Entry is null ? string.Empty : (choice.Entry.JapaneseName ?? choice.Entry.Name),
+                                EntryId = first?.Id ?? string.Empty,
+                                EntryName = first is null ? string.Empty : NameOf(first),
+                                EntryNotes = ModelPicker.CleanNotes(first?.Notes),
+                                MoreEntries = choice.Entries.Skip(1).Select(entry => new EntryPart { Id = entry.Id, Name = NameOf(entry), Notes = ModelPicker.CleanNotes(entry.Notes) }).ToList(),
+                                Question = EntryMatch.CurrentQuestion,
+                                UpTo = upTo,
                                 By = "model",
                                 Model = model.Name,
                                 Reason = choice.Reason,
@@ -220,9 +236,10 @@ internal sealed class FileFinder
                         continue;
                     }
 
+                    parts = PartsOf(match);
                     entryId = match.EntryId;
                     entryName = match.EntryName;
-                    files = await ListFilesAsync(source, query, entryId, cancellationToken).ConfigureAwait(false);
+                    files = await ListEntryFilesAsync(source, query, parts, cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
@@ -237,7 +254,7 @@ internal sealed class FileFinder
                     .OrderByDescending(candidate => candidate.Score)
                     .ToList();
                 all.AddRange(files);
-                reports.Add(new SourceReport(source.Id, source.Name, entryId, entryName, files.Count, matchedBy, null));
+                reports.Add(new SourceReport(source.Id, source.Name, entryId, entryName, files.Count, matchedBy, null, parts.Count > 1 ? parts.Select(p => p.Name).ToList() : null));
 
                 // Only the files of an entry need a reader of names. A source that is asked for one episode answers for that episode.
                 if (source.HasEntries && files.Count > 0)
@@ -246,7 +263,7 @@ internal sealed class FileFinder
                     {
                         try
                         {
-                            var (mapped, mapCost) = await MapAsync(source, video, query, entryId!, files, options, model!, rejected, note, cancellationToken).ConfigureAwait(false);
+                            var (mapped, mapCost) = await MapAsync(source, video, query, parts, files, options, model!, rejected, note, cancellationToken).ConfigureAwait(false);
                             cost += mapCost;
                             var listed = mapped.Select(c => c.File.Id).ToHashSet(StringComparer.Ordinal);
 
@@ -317,11 +334,31 @@ internal sealed class FileFinder
         _store.UpdateShow(video.ShowId, show => show.Matches[key] = new EntryMatch
         {
             EntryId = entry.Id,
-            EntryName = entry.JapaneseName ?? entry.Name,
+            EntryName = NameOf(entry),
+            EntryNotes = ModelPicker.CleanNotes(entry.Notes),
             By = "user",
             Reason = "Chosen by " + userName,
             At = DateTimeOffset.UtcNow
         });
+    }
+
+    /// <summary>
+    /// Lists the files of a season's entries, entry by entry in airing order. A file listed by two entries is kept once, with the first.
+    /// </summary>
+    public async Task<IReadOnlyList<SourceFile>> ListEntryFilesAsync(ISubtitleSource source, VideoQuery query, IReadOnlyList<EntryRef> parts, CancellationToken cancellationToken)
+    {
+        if (parts.Count == 1)
+        {
+            return await ListFilesAsync(source, query, parts[0].Id, cancellationToken).ConfigureAwait(false);
+        }
+
+        var files = new List<SourceFile>();
+        foreach (var part in parts)
+        {
+            files.AddRange(await ListFilesAsync(source, query, part.Id, cancellationToken).ConfigureAwait(false));
+        }
+
+        return files.DistinctBy(file => file.Id, StringComparer.Ordinal).ToList();
     }
 
     public async Task<IReadOnlyList<SourceFile>> ListFilesAsync(ISubtitleSource source, VideoQuery query, string? entryId, CancellationToken cancellationToken)
@@ -382,6 +419,45 @@ internal sealed class FileFinder
         });
     }
 
+    /// <summary>The entries of a match by id and name, in airing order.</summary>
+    internal static IReadOnlyList<EntryRef> PartsOf(EntryMatch match) =>
+        [new(match.EntryId, match.EntryName, match.EntryNotes), .. (match.MoreEntries ?? []).Where(part => part.Id.Length > 0 && part.Id != match.EntryId).Select(part => new EntryRef(part.Id, part.Name, part.Notes))];
+
+    /// <summary>
+    /// The files the model reads, at most <see cref="ModelPicker.MaxFilesForModel"/>. When a season's entries list more,
+    /// each entry keeps an even share, so a large entry cannot crowd out the files of the others.
+    /// </summary>
+    internal static IReadOnlyList<SourceFile> ForModel(IReadOnlyList<SourceFile> files, IReadOnlyList<EntryRef> parts)
+    {
+        if (files.Count <= ModelPicker.MaxFilesForModel || parts.Count < 2)
+        {
+            return files;
+        }
+
+        var groups = parts.Select(part => files.Where(file => file.EntryId == part.Id).ToList()).ToList();
+        var shares = new int[groups.Count];
+        var left = ModelPicker.MaxFilesForModel;
+        var open = Enumerable.Range(0, groups.Count).ToList();
+        while (left > 0 && open.Count > 0)
+        {
+            var share = Math.Max(1, left / open.Count);
+            foreach (var i in open.ToList())
+            {
+                var take = Math.Min(Math.Min(share, groups[i].Count - shares[i]), left);
+                shares[i] += take;
+                left -= take;
+                if (shares[i] == groups[i].Count)
+                {
+                    open.Remove(i);
+                }
+            }
+        }
+
+        return groups.SelectMany((group, i) => group.Take(shares[i])).ToList();
+    }
+
+    private static string NameOf(SourceEntry entry) => entry.JapaneseName ?? entry.Name;
+
     private static string Fingerprint(IReadOnlyList<SourceFile> files, IReadOnlyList<SeasonEpisode> episodes, string modelId)
     {
         var text = new StringBuilder(modelId).Append('\n');
@@ -417,7 +493,7 @@ internal sealed class FileFinder
         ISubtitleSource source,
         VideoInfo video,
         VideoQuery query,
-        string entryId,
+        IReadOnlyList<EntryRef> parts,
         IReadOnlyList<SourceFile> files,
         PickOptions options,
         ModelEntry model,
@@ -432,7 +508,10 @@ internal sealed class FileFinder
             return ([], 0);
         }
 
-        var key = string.Create(CultureInfo.InvariantCulture, $"{source.Id}|{entryId}|{(video.IsMovie ? "film" : "s" + (video.Season ?? 0))}|{query.Language}");
+        // One entry keeps the key it always had; a season split into parts is keyed by all of its entries.
+        var entries = string.Join('+', parts.Select(part => part.Id));
+        var key = string.Create(CultureInfo.InvariantCulture, $"{source.Id}|{entries}|{(video.IsMovie ? "film" : "s" + (video.Season ?? 0))}|{query.Language}");
+        files = ForModel(files, parts);
         var fingerprint = Fingerprint(files, episodes, model.Id);
         var mapping = _store.Show(video.ShowId)?.Mappings.GetValueOrDefault(key);
         var cost = 0.0;
@@ -440,7 +519,7 @@ internal sealed class FileFinder
         if (mapping is null || mapping.ListHash != fingerprint)
         {
             note(model.Name + " is reading the file names");
-            var map = await _model.MapFilesAsync(query, episodes, files, cancellationToken).ConfigureAwait(false);
+            var map = await _model.MapFilesAsync(query, episodes, files, cancellationToken, parts).ConfigureAwait(false);
             cost = map.CostUsd;
             mapping = new FileMapping
             {

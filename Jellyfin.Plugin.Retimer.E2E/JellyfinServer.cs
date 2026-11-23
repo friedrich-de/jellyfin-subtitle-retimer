@@ -623,16 +623,16 @@ public class JellyfinServer : IAsyncLifetime
         var offered = (body["tools"] as JsonArray ?? []).Select(tool => tool!["function"]!["name"]!.GetValue<string>()).ToList();
         var name = body["tool_choice"] is JsonObject forced
             ? forced["function"]!["name"]!.GetValue<string>()
-            : offered.Contains("choose_entry") ? "choose_entry" : offered.FirstOrDefault() ?? "none";
+            : offered.Contains("choose_entries") ? "choose_entries" : offered.FirstOrDefault() ?? "none";
         lock (ModelCalls)
         {
             ModelCalls.Add(name);
         }
 
         JsonObject arguments;
-        if (name == "choose_entry")
+        if (name == "choose_entries")
         {
-            arguments = new JsonObject { ["entry_id"] = "4321", ["reason"] = "The title fits." };
+            arguments = new JsonObject { ["reason"] = "The title fits.", ["entries"] = new JsonArray(new JsonObject { ["id"] = "4321", ["name"] = "Test Show" }) };
         }
         else if (name == "language_verdict")
         {

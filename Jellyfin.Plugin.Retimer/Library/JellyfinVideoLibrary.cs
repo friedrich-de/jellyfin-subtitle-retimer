@@ -640,15 +640,14 @@ internal sealed class JellyfinVideoLibrary : IVideoLibrary
     /// The season's name when the metadata gives it one of its own, such as the title of an arc. A plain
     /// "Season 17", "Staffel 17" or "Specials" says nothing the season's number does not.
     /// </summary>
-    internal static string? OwnSeasonName(Episode episode)
+    internal static string? OwnSeasonName(string? seasonName, int? number)
     {
-        var name = (episode.Season?.Name ?? episode.SeasonName)?.Trim();
+        var name = seasonName?.Trim();
         if (string.IsNullOrEmpty(name) || name.Length > 120)
         {
             return null;
         }
 
-        var number = episode.ParentIndexNumber;
         var words = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         var generic = (number is not null && words.Length == 2 && int.TryParse(words[1], NumberStyles.None, CultureInfo.InvariantCulture, out var n) && n == number)
             || (number == 0 && words.Length == 1);
@@ -852,7 +851,7 @@ internal sealed class JellyfinVideoLibrary : IVideoLibrary
             Year = show.ProductionYear,
             IsMovie = episode is null,
             Season = episode?.ParentIndexNumber,
-            SeasonName = episode is null ? null : OwnSeasonName(episode),
+            SeasonName = episode is null ? null : OwnSeasonName(episode.Season?.Name ?? episode.SeasonName, episode.ParentIndexNumber),
             Episode = episode?.IndexNumber,
             AbsoluteEpisode = absolute is not null && absolute.TryGetValue(video.Id, out var number) ? number : null,
             Aired = video.PremiereDate,

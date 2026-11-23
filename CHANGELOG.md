@@ -3,6 +3,19 @@
 Each section is the changelog Jellyfin shows for that version: `dev/package.sh --publish`
 copies it into the repository manifest.
 
+## 0.6.1.0
+
+Seasons that a source splits into parts are found.
+
+- When a source keeps one season of your library as several entries, one for each part, the model now chooses all of them. Season 17 of Bleach (Thousand-Year Blood War) is four entries on Jimaku, and before this version the plugin found no subtitle for it. The same goes for seasons such as Attack on Titan's third (two entries) or the first of SPY x FAMILY.
+- The model is told the season's own name, how many episodes it has and when they aired, and reads Jimaku's notes on each entry, which often say which episodes it holds. When the notes show that the chosen entries miss episodes of the season, the model is asked once more.
+- Jimaku is also searched for the show's title together with the season's name.
+- The files of every part are matched to the season's episodes together, also when a part counts its episodes from 1 again.
+- When the model matches files for only the first few episodes of a season, it is asked once more for the rest.
+- A season that gets a later episode has its entries chosen again, as a new part is often a new entry. An entry you chose yourself stays.
+- What the model chose for a season in an earlier version is asked again once, so a season that found nothing before is looked for again.
+- The list of files names every entry a season uses.
+
 ## 0.6.0.0
 
 Watch mode: shows and seasons get their subtitles by themselves.

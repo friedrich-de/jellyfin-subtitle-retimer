@@ -20,12 +20,18 @@ internal sealed record VideoQuery
 
     public int? Season { get; init; }
 
+    /// <summary>Gets the season's own name from the library's metadata, such as the title of its arc. <c>null</c> for a plain "Season 2".</summary>
+    public string? SeasonName { get; init; }
+
     public int? Episode { get; init; }
 
     /// <summary>Gets the episode's number counted from the first episode of the first season.</summary>
     public int? AbsoluteEpisode { get; init; }
 
     public string? EpisodeTitle { get; init; }
+
+    /// <summary>Gets the day the episode or film first aired.</summary>
+    public DateTime? Aired { get; init; }
 
     /// <summary>Gets the name of the video file, which often names the release.</summary>
     public string? VideoFileName { get; init; }
@@ -67,6 +73,9 @@ internal sealed record SourceEntry
     public bool IsMovie { get; init; }
 
     public DateTimeOffset? LastModified { get; init; }
+
+    /// <summary>Gets the source's own notes on the entry, such as which episodes it holds.</summary>
+    public string? Notes { get; init; }
 }
 
 /// <summary>

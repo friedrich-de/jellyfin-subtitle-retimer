@@ -132,10 +132,25 @@ internal sealed class RejectedKind
 
 internal sealed class EntryMatch
 {
-    /// <summary>Gets or sets the entry's id at the source. Empty when the search found no entry.</summary>
+    /// <summary>The version of the question that asks the model for the entries. A model's answer to an older one is asked again.</summary>
+    internal const int CurrentQuestion = 2;
+
+    /// <summary>Gets or sets the entry's id at the source, the first in airing order when there are several. Empty when the search found no entry.</summary>
     public string EntryId { get; set; } = string.Empty;
 
     public string EntryName { get; set; } = string.Empty;
+
+    /// <summary>Gets or sets the source's notes on the entry, such as which episodes it holds.</summary>
+    public string? EntryNotes { get; set; }
+
+    /// <summary>Gets or sets the entries after the first, in airing order, when the source splits the season into parts.</summary>
+    public List<EntryPart> MoreEntries { get; set; } = [];
+
+    /// <summary>Gets or sets the highest episode number the season had in the library when the model chose. A later episode has it asked again, since a new part may be a new entry.</summary>
+    public int UpTo { get; set; }
+
+    /// <summary>Gets or sets the version of the question the model answered; 0 for an answer of an earlier version of the plugin, or a choice that was not the model's.</summary>
+    public int Question { get; set; }
 
     /// <summary>Gets or sets who chose: <c>model</c>, <c>rules</c> or <c>user</c>.</summary>
     public string By { get; set; } = "rules";
@@ -146,6 +161,15 @@ internal sealed class EntryMatch
     public string? Reason { get; set; }
 
     public DateTimeOffset At { get; set; }
+}
+
+internal sealed class EntryPart
+{
+    public string Id { get; set; } = string.Empty;
+
+    public string Name { get; set; } = string.Empty;
+
+    public string? Notes { get; set; }
 }
 
 internal sealed class FileMapping

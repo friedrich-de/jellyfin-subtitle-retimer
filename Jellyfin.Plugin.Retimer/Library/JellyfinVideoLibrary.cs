@@ -248,7 +248,7 @@ internal sealed class JellyfinVideoLibrary : IVideoLibrary
             .Where(e => e.ParentIndexNumber == episode.ParentIndexNumber && e.IndexNumber is not null)
             .GroupBy(e => e.IndexNumber!.Value)
             .OrderBy(g => g.Key)
-            .Select(g => new SeasonEpisode(g.Key, absolute.GetValueOrDefault(g.First().Id), g.First().Name, FileNameOf(g.First())))
+            .Select(g => new SeasonEpisode(g.Key, absolute.GetValueOrDefault(g.First().Id), g.First().Name, FileNameOf(g.First()), g.First().PremiereDate))
             .ToList();
     }
 
@@ -636,6 +636,24 @@ internal sealed class JellyfinVideoLibrary : IVideoLibrary
 
     private static string? FileNameOf(BaseItem item) => string.IsNullOrEmpty(item.Path) ? null : Path.GetFileName(item.Path);
 
+    /// <summary>
+    /// The season's name when the metadata gives it one of its own, such as the title of an arc. A plain
+    /// "Season 17", "Staffel 17" or "Specials" says nothing the season's number does not.
+    /// </summary>
+    internal static string? OwnSeasonName(string? seasonName, int? number)
+    {
+        var name = seasonName?.Trim();
+        if (string.IsNullOrEmpty(name) || name.Length > 120)
+        {
+            return null;
+        }
+
+        var words = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var generic = (number is not null && words.Length == 2 && int.TryParse(words[1], NumberStyles.None, CultureInfo.InvariantCulture, out var n) && n == number)
+            || (number == 0 && words.Length == 1);
+        return generic ? null : name;
+    }
+
     private static int? IntId(BaseItem? item, string provider)
     {
         var value = TextId(item, provider);
@@ -833,8 +851,10 @@ internal sealed class JellyfinVideoLibrary : IVideoLibrary
             Year = show.ProductionYear,
             IsMovie = episode is null,
             Season = episode?.ParentIndexNumber,
+            SeasonName = episode is null ? null : OwnSeasonName(episode.Season?.Name ?? episode.SeasonName, episode.ParentIndexNumber),
             Episode = episode?.IndexNumber,
             AbsoluteEpisode = absolute is not null && absolute.TryGetValue(video.Id, out var number) ? number : null,
+            Aired = video.PremiereDate,
             Name = video.Name ?? string.Empty,
             FileName = FileNameOf(video),
             IsLocalFile = video.IsFileProtocol && !string.IsNullOrEmpty(video.Path),

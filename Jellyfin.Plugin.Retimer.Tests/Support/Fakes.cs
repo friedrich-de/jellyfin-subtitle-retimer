@@ -313,9 +313,16 @@ internal sealed class FakeModel : IModelClient
         return this;
     }
 
-    public FakeModel ChoosesEntry(string? id)
+    public FakeModel ChoosesEntry(string? id) => id is null ? ChoosesEntries() : ChoosesEntries(id);
+
+    /// <summary>Lets the model choose these entries, by id, in this order. None for an empty list.</summary>
+    public FakeModel ChoosesEntries(params string[] ids)
     {
-        Tools["choose_entry"] = _ => new JsonObject { ["entry_id"] = id, ["reason"] = "the title and the season fit" };
+        Tools["choose_entries"] = _ => new JsonObject
+        {
+            ["reason"] = "the title and the season fit",
+            ["entries"] = new JsonArray(ids.Select(id => (JsonNode)new JsonObject { ["id"] = id, ["name"] = string.Empty }).ToArray())
+        };
         return this;
     }
 }

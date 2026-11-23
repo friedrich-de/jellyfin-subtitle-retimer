@@ -93,7 +93,12 @@ Without Retimer API the plugin still finds, checks and saves subtitles; it just 
    anime and dramas) and [OpenSubtitles](https://www.opensubtitles.com) (many languages).
 2. **Pick.** A model, called through [OpenRouter](https://openrouter.ai) with your key, chooses the
    source's entry for the show and matches the listed files to the season's episodes. It only ever
-   chooses among files the sources list. The model is required: the plugin picks no file without
+   chooses among files the sources list. When a source splits what your library keeps as one season
+   into parts, as Jimaku does with season 17 of Bleach (Thousand-Year Blood War, four entries), the
+   model chooses all of them and the files of every part are matched to the season's episodes. It
+   is told the season's name, how many episodes it has and when they aired, and reads what Jimaku's
+   notes say about the episodes an entry holds. A season that gets a later episode is matched again,
+   since a new part is often a new entry. The model is required: the plugin picks no file without
    one. With no key or no model in the settings, "Get subtitle" and "Get all missing" are off and
    the page says what is missing. When the model gives no answer, the job fails and can be tried
    again. Choosing a file yourself always works.
@@ -156,7 +161,7 @@ hours or days later. Watch mode fetches those subtitles by themselves.
 | To | What | When |
 | --- | --- | --- |
 | The subtitle sources | The show's ids and title, and the downloads | On every search |
-| OpenRouter | The show's title, year and season, the episodes with the names of their video files (no folders), the sources' entry and file names, and up to 45 lines of a downloaded subtitle | When a model is set |
+| OpenRouter | The show's title, year and season, the season's name, the episodes with their titles, air dates and the names of their video files (no folders), the sources' entry and file names and their notes on the entries, and up to 45 lines of a downloaded subtitle | When a model is set |
 | Retimer API | The downloaded subtitle, the video's subtitle tracks with their language and title, and the audio if you allow it | When Retimer API is on |
 
 No video leaves the server. Only the audio does, and only if you allow it.

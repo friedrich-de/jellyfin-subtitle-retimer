@@ -359,7 +359,7 @@ internal sealed record FileView
     public string? Unusable { get; init; }
 }
 
-internal sealed record SourceReportView(string Source, string Name, string? EntryId, string? EntryName, int Files, string? MatchedBy, string? Problem);
+internal sealed record SourceReportView(string Source, string Name, string? EntryId, string? EntryName, int Files, string? MatchedBy, string? Problem, IReadOnlyList<string>? EntryNames = null);
 
 internal sealed record FilesView
 {

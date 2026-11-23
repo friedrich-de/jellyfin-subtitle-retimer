@@ -8,6 +8,14 @@
     "category": "Subtitles",
     "versions": [
       {
+        "version": "0.6.1.0",
+        "changelog": "Seasons that a source splits into parts are found.\n\n- When a source keeps one season of your library as several entries, one for each part, the model now chooses all of them. Season 17 of Bleach (Thousand-Year Blood War) is four entries on Jimaku, and before this version the plugin found no subtitle for it. The same goes for seasons such as Attack on Titan's third (two entries) or the first of SPY x FAMILY.\n- The model is told the season's own name, how many episodes it has and when they aired, and reads Jimaku's notes on each entry, which often say which episodes it holds. When the notes show that the chosen entries miss episodes of the season, the model is asked once more.\n- Jimaku is also searched for the show's title together with the season's name.\n- The files of every part are matched to the season's episodes together, also when a part counts its episodes from 1 again.\n- When the model matches files for only the first few episodes of a season, it is asked once more for the rest.\n- A season that gets a later episode has its entries chosen again, as a new part is often a new entry. An entry you chose yourself stays.\n- What the model chose for a season in an earlier version is asked again once, so a season that found nothing before is looked for again.\n- The list of files names every entry a season uses.",
+        "targetAbi": "12.4.0.0",
+        "sourceUrl": "https://raw.githubusercontent.com/friedrich-de/jellyfin-subtitle-retimer/main/repository/subtitle-retimer_0.6.1.0.zip",
+        "checksum": "9f3d59420e1d0eda1e227c31b3d1f302",
+        "timestamp": "2026-11-23T00:29:06Z"
+      },
+      {
         "version": "0.6.0.0",
         "changelog": "Watch mode: shows and seasons get their subtitles by themselves.\n\n- \"Watch this show\" on a show's page fetches the subtitle of each episode as soon as a source has it, for every season and the seasons added later. Each season has a switch of its own, so you can watch only the season that airs. A film can be watched too. A watched show has an eye on its poster.\n- Jellyfin runs the check every 3 hours as its own scheduled task, \"Check watched shows for subtitles\", and a show is checked a few minutes after it gets a new episode. A check starts a job only when a source lists a file that was not tried yet.\n- An episode is looked for for 30 days after it came, or after its season was switched on. The settings change the number, and \"Watch new shows\" watches every show that comes into the library from then on.\n- Activity has a second tab, Watching: what is watched, which episodes still wait, and how the last check went.",
         "targetAbi": "12.4.0.0",

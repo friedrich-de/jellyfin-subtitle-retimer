@@ -646,7 +646,7 @@ internal sealed class PageService
         return (view with
         {
             Files = files,
-            Sources = found.Sources.Select(s => new SourceReportView(s.Source, s.Name, s.EntryId, s.EntryName, s.Files, s.MatchedBy, s.Problem)).ToList(),
+            Sources = found.Sources.Select(s => new SourceReportView(s.Source, s.Name, s.EntryId, s.EntryName, s.Files, s.MatchedBy, s.Problem, s.EntryNames)).ToList(),
             Model = found.Model,
             ModelProblem = found.ModelProblem
         }, null);
@@ -704,7 +704,7 @@ internal sealed class PageService
                 entry.Name,
                 entry.EnglishName,
                 entry.JapaneseName,
-                matches is not null && matches.TryGetValue(FileFinder.MatchKey(entry.Source, video, language), out var match) && match.EntryId == entry.Id))
+                matches is not null && matches.TryGetValue(FileFinder.MatchKey(entry.Source, video, language), out var match) && FileFinder.PartsOf(match).Any(part => part.Id == entry.Id)))
             .ToList(), null);
     }
 

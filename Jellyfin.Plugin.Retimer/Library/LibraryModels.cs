@@ -82,9 +82,15 @@ internal sealed record VideoInfo
 
     public int? Season { get; init; }
 
+    /// <summary>Gets the season's own name, such as the title of its arc, or <c>null</c> for a plain "Season 2".</summary>
+    public string? SeasonName { get; init; }
+
     public int? Episode { get; init; }
 
     public int? AbsoluteEpisode { get; init; }
+
+    /// <summary>Gets the day the episode or film first aired.</summary>
+    public DateTime? Aired { get; init; }
 
     public string Name { get; init; } = string.Empty;
 

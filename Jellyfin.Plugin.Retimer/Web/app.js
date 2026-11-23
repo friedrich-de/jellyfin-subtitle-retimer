@@ -868,7 +868,8 @@
 
             var sources = data.Sources.map(function (s) {
                 var text = s.Name + ': ' + (s.Problem ? s.Problem
-                    : (s.EntryName ? 'entry “' + s.EntryName + '”' + (s.MatchedBy ? ', matched by ' + s.MatchedBy : '') + ', ' : '') + plural(s.Files, 'file', 'files'));
+                    : (s.EntryNames && s.EntryNames.length > 1 ? 'entries ' + s.EntryNames.map(function (n) { return '“' + n + '”'; }).join(', ') + (s.MatchedBy ? ', matched by ' + s.MatchedBy : '') + ', '
+                        : s.EntryName ? 'entry “' + s.EntryName + '”' + (s.MatchedBy ? ', matched by ' + s.MatchedBy : '') + ', ' : '') + plural(s.Files, 'file', 'files'));
                 return h('div', { class: 'small ' + (s.Problem ? 'warn' : 'muted'), text: text });
             });
 
